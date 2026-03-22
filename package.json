@@ -1,5 +1,5 @@
 {
-  "name": "dokploy-app",
+  "name": "emercall-server",
   "version": "1.0.0",
   "type": "module",
   "main": "serve.mjs",
