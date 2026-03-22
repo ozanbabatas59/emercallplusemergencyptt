@@ -18,8 +18,8 @@ import { randomBytes, createHash } from 'crypto';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const PORT = 3000;
-const HTTP_PORT = 3000;
+const PORT = 4000;
+const HTTP_PORT = 4000;
 const HOST = '0.0.0.0';
 const DATA_FILE = join(__dirname, 'data.json');
 
