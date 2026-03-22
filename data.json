@@ -1,0 +1,20 @@
+{
+  "adminToken": "4bc7369c593b272e3f89ab7e2a38dbdd90731168e76b0d28",
+  "users": [],
+  "channels": [
+    {
+      "name": "ACIL",
+      "password": null,
+      "createdBy": "admin"
+    },
+    {
+      "name": "TRST",
+      "password": "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
+      "createdBy": "admin"
+    }
+  ],
+  "adminTokenShown": true,
+  "bannedUsernames": [],
+  "bannedIPs": [],
+  "bannedDeviceIds": []
+}

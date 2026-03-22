@@ -1,0 +1,4779 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>EmercallPlus Intranet PTT // GPS Koordinat Sistemi</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="lib/leaflet.css" />
+  <script src="lib/leaflet.js"></script>
+  <style>
+    :root {
+      --primary: #ff6b00;
+      --primary-dim: #b34700;
+      --primary-glow: rgba(255, 107, 0, 0.4);
+      --bg-dark: #0a0a0a;
+      --bg-panel: #1a1a1a;
+      --bg-darker: #050505;
+      --text-dim: #4a4a4a;
+      --text-muted: #666;
+      --text-bright: #eee;
+      --text-terminal: #ffaa44;
+      --border-dark: #2a2a2a;
+      --border-accent: #3a3a3a;
+      --status-active: #00ff88;
+      --status-inactive: #333;
+      --scanline-opacity: 0.03;
+      --danger: #ff3333;
+      --warning: #ffaa00;
+      --success: #00ff88;
+    }
+
+    *, *::before, *::after {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    body {
+      font-family: 'JetBrains Mono', monospace;
+      background: var(--bg-dark);
+      color: var(--text-bright);
+      min-height: 100vh;
+      min-height: 100dvh;
+      overflow: hidden;
+      position: relative;
+      overscroll-behavior-y: contain;
+      touch-action: pan-y;
+    }
+
+    /* Safe area support */
+    @supports (padding: max(0px)) {
+      .container {
+        padding-left: max(0.5rem, env(safe-area-inset-left));
+        padding-right: max(0.5rem, env(safe-area-inset-right));
+        padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+      }
+    }
+
+    /* CRT Effects - Optimized */
+    .crt-overlay {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 1000;
+      will-change: transform;
+    }
+
+    .scanlines {
+      background: repeating-linear-gradient(
+        0deg,
+        rgba(0, 0, 0, var(--scanline-opacity)) 0px,
+        rgba(0, 0, 0, var(--scanline-opacity)) 1px,
+        transparent 1px,
+        transparent 2px
+      );
+    }
+
+    .vignette {
+      background: radial-gradient(ellipse at center, transparent 0%, rgba(0,0,0,0.3) 100%);
+    }
+
+    .ambient-glow {
+      position: fixed;
+      width: 600px;
+      height: 600px;
+      background: radial-gradient(circle, var(--primary-glow) 0%, transparent 70%);
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      opacity: 0.15;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .container {
+      position: relative;
+      z-index: 1;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      padding: 2rem;
+    }
+
+    /* Header */
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-bottom: 1.5rem;
+      border-bottom: 1px solid var(--border-dark);
+    }
+
+    .logo {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 1.5rem;
+      letter-spacing: 0.2em;
+      color: var(--primary);
+      text-shadow: 0 0 20px var(--primary-glow);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .logo::before {
+      content: '◆';
+      font-size: 0.8em;
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .status-bar {
+      display: flex;
+      gap: 1.5rem;
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+
+    .status-item {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--status-inactive);
+      transition: background 0.3s ease;
+    }
+
+    .status-dot.active {
+      background: var(--status-active);
+      box-shadow: 0 0 10px var(--status-active);
+    }
+
+    .status-dot.connecting {
+      background: var(--primary);
+      animation: blink 0.5s ease-in-out infinite;
+    }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+
+    .admin-btn {
+      background: transparent;
+      border: 1px solid var(--border-dark);
+      color: var(--text-dim);
+      padding: 0.4rem 0.8rem;
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 0.65rem;
+      cursor: pointer;
+      transition: border-color 0.2s ease, color 0.2s ease, background 0.2s ease;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+
+    .admin-btn:hover {
+      border-color: var(--primary);
+      color: var(--primary);
+    }
+
+    .admin-btn.active {
+      background: var(--primary);
+      border-color: var(--primary);
+      color: var(--bg-dark);
+    }
+
+    /* Main Layout */
+    .main {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 280px 1fr 280px;
+      gap: 1.5rem;
+      padding-top: 1.5rem;
+    }
+
+    /* Panels */
+    .panel {
+      background: var(--bg-panel);
+      border: 1px solid var(--border-dark);
+      padding: 1rem;
+      position: relative;
+    }
+
+    .panel::before {
+      content: '';
+      position: absolute;
+      top: -1px;
+      left: 20px;
+      right: 20px;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--primary), transparent);
+      opacity: 0.5;
+    }
+
+    .panel-title {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 0.2em;
+      color: var(--text-dim);
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .panel-title::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--border-accent);
+    }
+
+    /* Connection Panel */
+    .connection-form {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .input-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.3rem;
+    }
+
+    .input-label {
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-muted);
+    }
+
+    .input-field {
+      background: var(--bg-darker);
+      border: 1px solid var(--border-dark);
+      padding: 0.6rem 0.8rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.75rem;
+      color: var(--text-bright);
+      outline: none;
+      transition: border-color 0.2s ease;
+    }
+
+    .input-field:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 2px var(--primary-glow);
+    }
+
+    .input-field::placeholder {
+      color: var(--text-dim);
+    }
+
+    .btn {
+      background: var(--bg-darker);
+      border: 1px solid var(--border-dark);
+      padding: 0.7rem 1rem;
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-bright);
+      cursor: pointer;
+      position: relative;
+      overflow: hidden;
+      transition: border-color 0.2s ease, color 0.2s ease, transform 0.1s ease, background 0.2s ease;
+    }
+
+    .btn:hover {
+      border-color: var(--primary-dim);
+      color: var(--primary);
+    }
+
+    .btn:active {
+      transform: scale(0.98);
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--primary-dim) 0%, var(--primary-dim) 100%);
+      border-color: var(--primary);
+      color: var(--bg-dark);
+    }
+
+    .btn-primary:hover {
+      background: var(--primary);
+      color: var(--bg-dark);
+      box-shadow: 0 0 20px var(--primary-glow);
+    }
+
+    .btn-danger {
+      border-color: var(--danger);
+      color: var(--danger);
+    }
+
+    .btn-danger:hover {
+      background: rgba(255, 51, 51, 0.1);
+      box-shadow: 0 0 15px rgba(255, 51, 51, 0.3);
+    }
+
+    .btn-small {
+      padding: 0.4rem 0.6rem;
+      font-size: 0.65rem;
+    }
+
+    /* Channel buttons */
+    .channel-btn {
+      background: var(--bg-darker);
+      border: 1px solid var(--border-dark);
+      padding: 0.8rem 1rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      transition: border-color 0.2s ease, background 0.2s ease;
+      cursor: pointer;
+      position: relative;
+    }
+
+    .channel-btn:hover {
+      border-color: var(--primary-dim);
+      background: rgba(255, 107, 0, 0.05);
+    }
+
+    .channel-btn.selected {
+      border-color: var(--primary);
+      background: rgba(255, 107, 0, 0.1);
+      box-shadow: 0 0 15px var(--primary-glow);
+    }
+
+    .channel-btn.selected .channel-btn-name {
+      color: var(--primary);
+    }
+
+    .channel-btn-name {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 0.8rem;
+      color: var(--text-bright);
+      letter-spacing: 0.1em;
+    }
+
+    .channel-btn-info {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .channel-btn-locked {
+      width: 10px;
+      height: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--warning);
+      font-size: 0.5rem;
+    }
+
+    .channel-btn-hint {
+      font-size: 0.55rem;
+      color: var(--text-dim);
+      text-align: center;
+      margin-top: 0.5rem;
+      font-style: italic;
+    }
+
+    /* Channel Display */
+    .channel-display {
+      background: var(--bg-darker);
+      border: 2px solid var(--border-dark);
+      padding: 1rem;
+      text-align: center;
+      margin-bottom: 1rem;
+      position: relative;
+    }
+
+    .channel-display::before {
+      content: 'KANAL';
+      position: absolute;
+      top: -8px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--bg-panel);
+      padding: 0 0.5rem;
+      font-size: 0.55rem;
+      letter-spacing: 0.15em;
+      color: var(--text-dim);
+    }
+
+    .channel-name {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 1.8rem;
+      color: var(--primary);
+      text-shadow: 0 0 30px var(--primary-glow);
+      letter-spacing: 0.1em;
+    }
+
+    .channel-freq {
+      font-size: 0.6rem;
+      color: var(--text-muted);
+      letter-spacing: 0.2em;
+      margin-top: 0.3rem;
+    }
+
+    /* Visualizer */
+    .visualizer-container {
+      background: var(--bg-darker);
+      border: 1px solid var(--border-dark);
+      height: 120px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .visualizer-grid {
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(var(--border-dark) 1px, transparent 1px),
+        linear-gradient(90deg, var(--border-dark) 1px, transparent 1px);
+      background-size: 20px 20px;
+      opacity: 0.3;
+    }
+
+    .visualizer-canvas {
+      width: 100%;
+      height: 100%;
+    }
+
+    /* Center Panel */
+    .center-panel {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 2rem;
+    }
+
+    .ptt-container {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .ptt-button {
+      width: 200px;
+      height: 200px;
+      border-radius: 50%;
+      background:
+        radial-gradient(circle at 30% 30%, #3a3a3a 0%, #1a1a1a 50%, #0a0a0a 100%);
+      border: 4px solid var(--border-dark);
+      position: relative;
+      cursor: pointer;
+      transition: transform 0.15s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+      outline: none;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      touch-action: manipulation;
+      user-select: none;
+    }
+
+    @media (pointer: coarse) {
+      .ptt-button {
+        transition: transform 0.1s ease, box-shadow 0.1s ease;
+      }
+
+      .ptt-button:active {
+        transform: scale(0.95);
+      }
+
+      .ptt-button.active {
+        transform: scale(0.97);
+      }
+    }
+
+    .ptt-button::before {
+      content: '';
+      position: absolute;
+      inset: 3px;
+      border-radius: 50%;
+      border: 1px solid var(--border-accent);
+    }
+
+    .ptt-button::after {
+      content: '';
+      position: absolute;
+      width: 120px;
+      height: 120px;
+      border-radius: 50%;
+      background: radial-gradient(circle, var(--primary-glow) 0%, transparent 70%);
+      opacity: 0;
+      transition: opacity 0.2s ease;
+    }
+
+    .ptt-button:hover:not(:disabled) {
+      border-color: var(--primary-dim);
+      box-shadow:
+        0 0 30px rgba(255, 107, 0, 0.2),
+        inset 0 2px 10px rgba(255, 255, 255, 0.05);
+    }
+
+    .ptt-button.active {
+      border-color: var(--primary);
+      box-shadow:
+        0 0 50px var(--primary-glow),
+        0 0 100px rgba(255, 107, 0, 0.3),
+        inset 0 0 30px rgba(255, 107, 0, 0.2);
+    }
+
+    .ptt-button.active::after {
+      opacity: 1;
+    }
+
+    .ptt-button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .ptt-icon {
+      width: 50px;
+      height: 50px;
+      fill: var(--text-muted);
+      transition: fill 0.2s ease;
+      position: relative;
+      z-index: 1;
+    }
+
+    .ptt-button:not(:disabled) .ptt-icon {
+      fill: var(--text-bright);
+    }
+
+    .ptt-button.active .ptt-icon {
+      fill: var(--primary);
+    }
+
+    .ptt-label {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 0.9rem;
+      letter-spacing: 0.2em;
+      color: var(--text-muted);
+      position: relative;
+      z-index: 1;
+    }
+
+    .ptt-button.active .ptt-label {
+      color: var(--primary);
+      text-shadow: 0 0 20px var(--primary-glow);
+    }
+
+    .ptt-hint {
+      font-size: 0.65rem;
+      color: var(--text-dim);
+      letter-spacing: 0.1em;
+    }
+
+    .ptt-hint kbd {
+      background: var(--bg-darker);
+      border: 1px solid var(--border-dark);
+      padding: 0.2rem 0.4rem;
+      border-radius: 3px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.7rem;
+    }
+
+    /* TX Indicator */
+    .tx-indicator {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 1rem;
+      background: var(--bg-darker);
+      border: 1px solid var(--border-dark);
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 0.75rem;
+      letter-spacing: 0.1em;
+      color: var(--text-muted);
+    }
+
+    .tx-indicator.active {
+      border-color: var(--primary);
+      color: var(--primary);
+    }
+
+    .tx-light {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--status-inactive);
+      transition: all 0.1s ease;
+    }
+
+    .tx-indicator.active .tx-light {
+      background: var(--primary);
+      box-shadow: 0 0 15px var(--primary), 0 0 30px var(--primary-glow);
+      animation: tx-pulse 0.5s ease-in-out infinite;
+    }
+
+    @keyframes tx-pulse {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.3); opacity: 0.8; }
+    }
+
+    /* Users Panel */
+    .users-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+
+    .users-list::-webkit-scrollbar {
+      width: 4px;
+    }
+
+    .users-list::-webkit-scrollbar-track {
+      background: var(--bg-darker);
+    }
+
+    .users-list::-webkit-scrollbar-thumb {
+      background: var(--border-accent);
+    }
+
+    .user-item {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      padding: 0.5rem 0.7rem;
+      background: var(--bg-darker);
+      border: 1px solid var(--border-dark);
+      font-size: 0.7rem;
+      transition: border-color 0.2s ease, background 0.2s ease;
+    }
+
+    .user-item.speaking {
+      border-color: var(--primary);
+      background: rgba(255, 107, 0, 0.05);
+    }
+
+    .user-avatar {
+      width: 24px;
+      height: 24px;
+      border-radius: 3px;
+      background: linear-gradient(135deg, var(--border-accent) 0%, var(--border-dark) 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 0.65rem;
+      color: var(--text-muted);
+    }
+
+    .user-item.speaking .user-avatar {
+      background: var(--primary);
+      color: var(--bg-dark);
+    }
+
+    .user-name {
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .user-info {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 0.15rem;
+      min-width: 0;
+    }
+
+    .user-distance {
+      font-size: 0.6rem;
+      color: var(--text-terminal);
+      font-family: 'Share Tech Mono', monospace;
+      white-space: nowrap;
+    }
+
+    .user-speaker {
+      width: 8px;
+      height: 8px;
+      border-radius: 2px;
+      background: var(--status-inactive);
+      transition: all 0.1s ease;
+    }
+
+    .user-item.speaking .user-speaker {
+      background: var(--primary);
+      box-shadow: 0 0 10px var(--primary);
+      animation: speaker-pulse 0.3s ease-in-out infinite;
+    }
+
+    @keyframes speaker-pulse {
+      0%, 100% { transform: scaleY(1); }
+      50% { transform: scaleY(1.5); }
+    }
+
+    /* System Messages */
+    .system-messages {
+      font-size: 0.65rem;
+      color: var(--text-muted);
+      max-height: 150px;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 0.3rem;
+    }
+
+    .system-messages::-webkit-scrollbar {
+      width: 3px;
+    }
+
+    .system-msg {
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--text-dim);
+    }
+
+    .system-msg.success {
+      color: var(--status-active);
+    }
+
+    .system-msg.error {
+      color: var(--danger);
+    }
+
+    .system-msg.info {
+      color: var(--text-terminal);
+    }
+
+    /* Signal Bars */
+    #signal-bars {
+      display: flex;
+      gap: 2px;
+      height: 30px;
+      align-items: flex-end;
+    }
+
+    .signal-bar {
+      width: 8px;
+      background: var(--status-inactive);
+      transition: background 0.3s ease;
+    }
+
+    /* Footer */
+    .footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding-top: 1rem;
+      border-top: 1px solid var(--border-dark);
+      font-size: 0.6rem;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+
+    .footer-links {
+      display: flex;
+      gap: 1.5rem;
+    }
+
+    .footer-link {
+      color: var(--text-dim);
+      text-decoration: none;
+      transition: color 0.2s ease;
+    }
+
+    .footer-link:hover {
+      color: var(--primary);
+    }
+
+    /* Hidden state */
+    .hidden {
+      display: none !important;
+    }
+
+    /* Noise texture overlay */
+    .noise {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 998;
+      opacity: 0.02;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%' height='100%' filter='url(%23noise)'/%3E%3C/svg%3E");
+    }
+
+    /* Modal */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.8);
+      z-index: 2000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+      backdrop-filter: blur(4px);
+    }
+
+    .modal {
+      background: var(--bg-panel);
+      border: 1px solid var(--border-dark);
+      max-width: 600px;
+      width: 100%;
+      max-height: 80vh;
+      overflow-y: auto;
+      position: relative;
+    }
+
+    .modal::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--primary), transparent);
+    }
+
+    .modal-header {
+      padding: 1rem;
+      border-bottom: 1px solid var(--border-dark);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .modal-title {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 1rem;
+      color: var(--primary);
+      letter-spacing: 0.15em;
+    }
+
+    .modal-close {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-size: 1.5rem;
+      cursor: pointer;
+      padding: 0;
+      width: 30px;
+      height: 30px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: color 0.2s ease;
+    }
+
+    .modal-close:hover {
+      color: var(--danger);
+    }
+
+    .modal-body {
+      padding: 1rem;
+    }
+
+    .modal-footer {
+      padding: 1rem;
+      border-top: 1px solid var(--border-dark);
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.5rem;
+    }
+
+    /* Admin Panel */
+    .admin-section {
+      margin-bottom: 1.5rem;
+    }
+
+    .admin-section-title {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+      margin-bottom: 0.75rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .admin-section-title::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--border-accent);
+    }
+
+    .admin-channel-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .admin-channel-item {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.6rem;
+      background: var(--bg-darker);
+      border: 1px solid var(--border-dark);
+      font-size: 0.7rem;
+    }
+
+    .admin-channel-name {
+      flex: 1;
+      font-family: 'Share Tech Mono', monospace;
+      color: var(--text-bright);
+    }
+
+    .admin-channel-name.locked {
+      color: var(--warning);
+    }
+
+    .admin-channel-actions {
+      display: flex;
+      gap: 0.3rem;
+    }
+
+    .admin-input-row {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .admin-input-row .input-field {
+      flex: 1;
+    }
+
+    .ban-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.3rem;
+    }
+
+    .ban-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.5rem;
+      background: var(--bg-darker);
+      border: 1px solid var(--border-dark);
+      font-size: 0.65rem;
+    }
+
+    .ban-ip {
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--danger);
+    }
+
+    /* Stats Display */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 0.5rem;
+    }
+
+    .stat-item {
+      padding: 0.5rem;
+      background: var(--bg-darker);
+      border: 1px solid var(--border-dark);
+      text-align: center;
+    }
+
+    .stat-value {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 1.2rem;
+      color: var(--primary);
+    }
+
+    .stat-label {
+      font-size: 0.55rem;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+
+    /* Password Modal */
+    .password-prompt-text {
+      text-align: center;
+      color: var(--text-muted);
+      margin-bottom: 1rem;
+      font-size: 0.75rem;
+    }
+
+    .password-channel-name {
+      color: var(--primary);
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 1rem;
+    }
+
+    /* Responsive */
+    @media (max-width: 1024px) {
+      .main {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto auto auto;
+        gap: 1rem;
+      }
+    }
+
+    @media (max-width: 768px) {
+      .container {
+        padding: 0.5rem;
+        height: 100vh;
+        height: 100dvh;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .header {
+        padding: 0.5rem;
+        flex-shrink: 0;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+      }
+
+      .logo {
+        font-size: 0.9rem;
+      }
+
+      .status-bar {
+        font-size: 0.5rem;
+        gap: 0.5rem;
+      }
+
+      .main {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+        flex: 1;
+        overflow-y: auto;
+        padding: 0;
+      }
+
+      .center-panel {
+        order: -1;
+        flex-shrink: 0;
+      }
+
+      .panel {
+        padding: 0.75rem;
+      }
+
+      .input-field {
+        padding: 0.75rem;
+        font-size: 16px;
+        border-radius: 4px;
+      }
+
+      .btn {
+        padding: 0.85rem;
+        font-size: 0.75rem;
+        border-radius: 4px;
+        min-height: 48px;
+      }
+
+      .channel-btn {
+        padding: 0.9rem;
+        border-radius: 4px;
+        min-height: 52px;
+      }
+
+      .channel-btn-name {
+        font-size: 0.85rem;
+      }
+
+      .channel-btn-users {
+        font-size: 0.6rem;
+      }
+
+      .channel-display {
+        padding: 0.6rem;
+        margin-bottom: 0.75rem;
+      }
+
+      .channel-name {
+        font-size: 1.2rem;
+      }
+
+      .ptt-button {
+        width: 150px;
+        height: 150px;
+      }
+
+      .ptt-icon {
+        width: 38px;
+        height: 38px;
+      }
+
+      .ptt-label {
+        font-size: 0.65rem;
+      }
+
+      .ptt-hint {
+        font-size: 0.5rem;
+        display: none;
+      }
+
+      .tx-indicator {
+        padding: 0.4rem 0.8rem;
+        font-size: 0.65rem;
+        border-radius: 4px;
+      }
+
+      .visualizer-container {
+        height: 60px;
+        border-radius: 4px;
+      }
+
+      .users-list {
+        max-height: 150px;
+      }
+
+      .system-messages {
+        max-height: 80px;
+        font-size: 0.55rem;
+      }
+
+      .footer {
+        font-size: 0.5rem;
+        padding: 0.5rem;
+        flex-shrink: 0;
+      }
+
+      .admin-btn {
+        display: none;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .container {
+        padding: 0.4rem;
+      }
+
+      .header {
+        gap: 0.3rem;
+      }
+
+      .logo {
+        font-size: 0.8rem;
+      }
+
+      .ptt-button {
+        width: 130px;
+        height: 130px;
+      }
+
+      .ptt-icon {
+        width: 32px;
+        height: 32px;
+      }
+
+      .panel {
+        padding: 0.6rem;
+      }
+
+      .channel-btn {
+        padding: 0.75rem;
+        min-height: 48px;
+      }
+
+      .channel-btn-name {
+        font-size: 0.75rem;
+      }
+
+      .channel-btn-users {
+        font-size: 0.55rem;
+      }
+    }
+
+    /* Touch device optimizations */
+    @media (hover: none) and (pointer: coarse) {
+      .ptt-button {
+        -webkit-tap-highlight-color: transparent;
+        user-select: none;
+      }
+
+      .ptt-button:active {
+        transform: scale(0.95);
+      }
+
+      .btn {
+        -webkit-tap-highlight-color: transparent;
+      }
+    }
+
+    /* GPS Styles */
+    .gps-toggle {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.5rem;
+      background: var(--bg-darker);
+      border: 1px solid var(--border-dark);
+      margin-bottom: 0.75rem;
+      border-radius: 4px;
+    }
+
+    .gps-toggle-label {
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .gps-toggle-switch {
+      width: 40px;
+      height: 20px;
+      background: var(--status-inactive);
+      border-radius: 10px;
+      position: relative;
+      cursor: pointer;
+      transition: background 0.3s ease;
+    }
+
+    .gps-toggle-switch.active {
+      background: var(--status-active);
+    }
+
+    .gps-toggle-switch::after {
+      content: '';
+      position: absolute;
+      width: 16px;
+      height: 16px;
+      background: white;
+      border-radius: 50%;
+      top: 2px;
+      left: 2px;
+      transition: transform 0.3s ease;
+    }
+
+    .gps-toggle-switch.active::after {
+      transform: translateX(20px);
+    }
+
+    .gps-coordinates {
+      background: var(--bg-darker);
+      border: 1px solid var(--border-dark);
+      padding: 0.5rem;
+      margin-bottom: 0.75rem;
+      font-size: 0.55rem;
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    .coord-row {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 0.25rem;
+    }
+
+    .coord-label {
+      color: var(--text-muted);
+    }
+
+    .coord-value {
+      color: var(--primary);
+    }
+
+    .coord-value.no-data {
+      color: var(--text-dim);
+    }
+
+    /* Location Tabs */
+    .location-tabs {
+      display: flex;
+      gap: 0.25rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .location-tab {
+      flex: 1;
+      padding: 0.4rem;
+      font-size: 0.6rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      background: var(--bg-darker);
+      border: 1px solid var(--border-dark);
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.2s ease;
+      font-family: 'Share Tech Mono', monospace;
+    }
+
+    .location-tab:hover {
+      border-color: var(--primary-dim);
+    }
+
+    .location-tab.active {
+      background: var(--primary);
+      border-color: var(--primary);
+      color: var(--bg-dark);
+    }
+
+    .location-content {
+      display: none;
+    }
+
+    .location-content.active {
+      display: block;
+    }
+
+    /* User Location List */
+    .user-location-item {
+      background: var(--bg-darker);
+      border: 1px solid var(--border-dark);
+      padding: 0.5rem;
+      margin-bottom: 0.4rem;
+      font-size: 0.7rem;
+    }
+
+    .user-location-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.3rem;
+    }
+
+    .user-location-name {
+      color: var(--text-bright);
+      font-weight: 500;
+    }
+
+    .user-location-distance {
+      color: var(--primary);
+      font-size: 0.6rem;
+    }
+
+    .user-location-coords {
+      font-size: 0.55rem;
+      color: var(--text-muted);
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    /* Leaflet Map Container */
+    #gps-map {
+      height: 300px;
+      width: 100%;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .leaflet-container {
+      background: #1a1a1a;
+    }
+
+    .leaflet-popup-content-wrapper {
+      background: var(--bg-panel);
+      color: var(--text-bright);
+      border: 1px solid var(--border-dark);
+      border-radius: 4px;
+    }
+
+    .leaflet-popup-tip {
+      background: var(--bg-panel);
+    }
+
+    .map-status {
+      font-size: 0.6rem;
+      color: var(--primary);
+      text-align: center;
+      padding: 0.5rem;
+      font-family: 'JetBrains Mono', monospace;
+      background: rgba(255, 107, 0, 0.1);
+      border-radius: 4px;
+      margin-top: 0.5rem;
+    }
+
+    /* ==========================================
+       MESAJLAŞMA & SOS SİSTEMİ
+       ========================================== */
+
+    /* SOS Butonu */
+    .sos-button {
+      position: fixed;
+      bottom: 20px;
+      left: 20px;
+      width: 70px;
+      height: 70px;
+      border-radius: 50%;
+      background: var(--danger);
+      border: 3px solid #ff6666;
+      cursor: pointer;
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 2px;
+      box-shadow:
+        0 0 30px rgba(255, 51, 51, 0.5),
+        0 4px 20px rgba(0, 0, 0, 0.5),
+        inset 0 0 20px rgba(255, 255, 255, 0.1);
+      animation: sos-pulse 2s ease-in-out infinite;
+    }
+
+    .sos-button:hover {
+      background: #ff4444;
+      transform: scale(1.05);
+    }
+
+    .sos-button:active {
+      transform: scale(0.95);
+    }
+
+    .sos-button-text {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 0.9rem;
+      font-weight: 700;
+      color: white;
+      letter-spacing: 0.1em;
+    }
+
+    .sos-button-icon {
+      font-size: 1.2rem;
+    }
+
+    @keyframes sos-pulse {
+      0%, 100% {
+        box-shadow:
+          0 0 30px rgba(255, 51, 51, 0.5),
+          0 4px 20px rgba(0, 0, 0, 0.5),
+          inset 0 0 20px rgba(255, 255, 255, 0.1);
+      }
+      50% {
+        box-shadow:
+          0 0 50px rgba(255, 51, 51, 0.8),
+          0 0 80px rgba(255, 51, 51, 0.4),
+          0 4px 20px rgba(0, 0, 0, 0.5),
+          inset 0 0 20px rgba(255, 255, 255, 0.1);
+      }
+    }
+
+    /* Chat Toggle Button */
+    .chat-toggle {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      width: 60px;
+      height: 60px;
+      border-radius: 50%;
+      background: var(--bg-panel);
+      border: 2px solid var(--border-accent);
+      cursor: pointer;
+      z-index: 1000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.5rem;
+      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+      transition: all 0.2s ease;
+    }
+
+    .chat-toggle:hover {
+      background: var(--bg-darker);
+      border-color: var(--primary);
+    }
+
+    .chat-toggle.has-unread {
+      border-color: var(--warning);
+      animation: chat-bounce 0.5s ease;
+    }
+
+    .chat-badge {
+      position: absolute;
+      top: -5px;
+      right: -5px;
+      width: 20px;
+      height: 20px;
+      background: var(--warning);
+      border-radius: 50%;
+      font-size: 0.65rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Share Tech Mono', monospace;
+      font-weight: 700;
+    }
+
+    @keyframes chat-bounce {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.2); }
+    }
+
+    /* Chat Modal */
+    .chat-modal {
+      position: fixed;
+      bottom: 90px;
+      right: 20px;
+      width: 350px;
+      max-width: calc(100vw - 40px);
+      background: var(--bg-panel);
+      border: 1px solid var(--border-dark);
+      border-radius: 8px;
+      z-index: 999;
+      display: none;
+      flex-direction: column;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+    }
+
+    .chat-modal.active {
+      display: flex;
+    }
+
+    .chat-modal-header {
+      padding: 0.75rem 1rem;
+      background: var(--bg-darker);
+      border-bottom: 1px solid var(--border-dark);
+      border-radius: 8px 8px 0 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .chat-modal-title {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 0.85rem;
+      color: var(--primary);
+      letter-spacing: 0.1em;
+    }
+
+    .chat-modal-close {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-size: 1.2rem;
+      cursor: pointer;
+      padding: 0;
+      width: 24px;
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .chat-modal-close:hover {
+      color: var(--text-bright);
+    }
+
+    /* Chat Tabs */
+    .chat-tabs {
+      display: flex;
+      border-bottom: 1px solid var(--border-dark);
+    }
+
+    .chat-tab {
+      flex: 1;
+      padding: 0.6rem;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.2s ease;
+      font-family: 'Share Tech Mono', monospace;
+      border-bottom: 2px solid transparent;
+    }
+
+    .chat-tab:hover {
+      color: var(--text-bright);
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .chat-tab.active {
+      color: var(--primary);
+      border-bottom-color: var(--primary);
+    }
+
+    /* Chat Content */
+    .chat-content {
+      display: none;
+      flex-direction: column;
+      height: 350px;
+      max-height: 50vh;
+    }
+
+    .chat-content.active {
+      display: flex;
+    }
+
+    /* Messages List */
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0.75rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .chat-messages::-webkit-scrollbar {
+      width: 4px;
+    }
+
+    .chat-messages::-webkit-scrollbar-track {
+      background: var(--bg-darker);
+    }
+
+    .chat-messages::-webkit-scrollbar-thumb {
+      background: var(--border-accent);
+    }
+
+    .chat-message {
+      padding: 0.5rem 0.75rem;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      max-width: 85%;
+    }
+
+    .chat-message.sent {
+      align-self: flex-end;
+      background: var(--primary-dim);
+      color: white;
+    }
+
+    .chat-message.received {
+      align-self: flex-start;
+      background: var(--bg-darker);
+      border: 1px solid var(--border-dark);
+    }
+
+    .chat-message.system {
+      align-self: center;
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      font-size: 0.65rem;
+      text-align: center;
+      font-style: italic;
+    }
+
+    .chat-message-sender {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 0.65rem;
+      color: var(--primary);
+      margin-bottom: 0.2rem;
+    }
+
+    .chat-message-text {
+      word-wrap: break-word;
+      line-height: 1.4;
+    }
+
+    .chat-message-time {
+      font-size: 0.55rem;
+      color: rgba(255, 255, 255, 0.5);
+      margin-top: 0.2rem;
+    }
+
+    .chat-message.received .chat-message-time {
+      color: var(--text-dim);
+    }
+
+    .chat-message.broadcast {
+      align-self: center;
+      background: linear-gradient(135deg, rgba(255, 170, 0, 0.1), var(--bg-darker));
+      border: 1px solid var(--warning);
+      max-width: 95%;
+    }
+
+    .chat-message.broadcast .chat-message-sender {
+      color: var(--warning);
+    }
+
+    /* Chat Input */
+    .chat-input-area {
+      padding: 0.75rem;
+      border-top: 1px solid var(--border-dark);
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .chat-input {
+      flex: 1;
+      background: var(--bg-darker);
+      border: 1px solid var(--border-dark);
+      padding: 0.6rem 0.75rem;
+      border-radius: 4px;
+      color: var(--text-bright);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.75rem;
+    }
+
+    .chat-input:focus {
+      outline: none;
+      border-color: var(--primary);
+    }
+
+    .chat-send-btn {
+      width: 40px;
+      height: 40px;
+      background: var(--primary);
+      border: none;
+      border-radius: 4px;
+      color: white;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s ease;
+    }
+
+    .chat-send-btn:hover {
+      background: var(--primary-dim);
+    }
+
+    /* Chat Input Header */
+    .chat-input-header {
+      padding: 0.5rem 0.75rem;
+      background: var(--bg-darker);
+      border-top: 1px solid var(--border-dark);
+      border-bottom: 1px solid var(--border-dark);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      font-size: 0.7rem;
+    }
+
+    .chat-input-header-text {
+      font-family: 'Share Tech Mono', monospace;
+      color: var(--primary);
+      font-weight: 600;
+    }
+
+    .chat-input-header-clear {
+      background: var(--warning);
+      border: none;
+      padding: 0.3rem 0.5rem;
+      border-radius: 3px;
+      font-size: 0.65rem;
+      font-family: 'JetBrains Mono', monospace;
+      cursor: pointer;
+      color: var(--bg-dark);
+      font-weight: 600;
+    }
+
+    .chat-input-header-clear:hover {
+      background: #ffcc00;
+    }
+
+    .chat-input-header-hint {
+      font-size: 0.6rem;
+      color: var(--text-dim);
+      font-style: italic;
+    }
+
+    /* User List for Chat */
+    .chat-user-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0.5rem;
+    }
+
+    .chat-user-item {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.6rem;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background 0.2s ease;
+    }
+
+    .chat-user-item:hover {
+      background: var(--bg-darker);
+    }
+
+    .chat-user-item.selected {
+      background: rgba(255, 107, 0, 0.1);
+      border: 1px solid var(--primary);
+    }
+
+    .chat-user-avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 4px;
+      background: linear-gradient(135deg, var(--border-accent), var(--border-dark));
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 0.7rem;
+      color: var(--text-muted);
+    }
+
+    .chat-user-name {
+      flex: 1;
+      font-size: 0.75rem;
+    }
+
+    .chat-user-status {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--status-inactive);
+    }
+
+    .chat-user-status.online {
+      background: var(--status-active);
+    }
+
+    /* Notifications */
+    .notifications-container {
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      z-index: 2000;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+      pointer-events: none;
+    }
+
+    .notification {
+      pointer-events: auto;
+      min-width: 300px;
+      max-width: 400px;
+      background: var(--bg-panel);
+      border: 1px solid var(--border-dark);
+      border-radius: 6px;
+      padding: 0.75rem 1rem;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+      animation: notification-slide-in 0.3s ease;
+      display: flex;
+      align-items: flex-start;
+      gap: 0.75rem;
+    }
+
+    .notification.removing {
+      animation: notification-slide-out 0.3s ease forwards;
+    }
+
+    @keyframes notification-slide-in {
+      from {
+        transform: translateX(100%);
+        opacity: 0;
+      }
+      to {
+        transform: translateX(0);
+        opacity: 1;
+      }
+    }
+
+    @keyframes notification-slide-out {
+      to {
+        transform: translateX(100%);
+        opacity: 0;
+      }
+    }
+
+    .notification-icon {
+      font-size: 1.5rem;
+      flex-shrink: 0;
+    }
+
+    .notification-content {
+      flex: 1;
+    }
+
+    .notification-title {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 0.8rem;
+      font-weight: 600;
+      margin-bottom: 0.2rem;
+    }
+
+    .notification-message {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      line-height: 1.4;
+    }
+
+    .notification-close {
+      background: none;
+      border: none;
+      color: var(--text-dim);
+      cursor: pointer;
+      padding: 0;
+      font-size: 1rem;
+      line-height: 1;
+    }
+
+    .notification-close:hover {
+      color: var(--text-bright);
+    }
+
+    /* Notification Types */
+    .notification.info {
+      border-left: 3px solid var(--primary);
+    }
+
+    .notification.info .notification-icon {
+      color: var(--primary);
+    }
+
+    .notification.success {
+      border-left: 3px solid var(--status-active);
+    }
+
+    .notification.success .notification-icon {
+      color: var(--status-active);
+    }
+
+    .notification.error {
+      border-left: 3px solid var(--danger);
+    }
+
+    .notification.error .notification-icon {
+      color: var(--danger);
+    }
+
+    .notification.warning {
+      border-left: 3px solid var(--warning);
+    }
+
+    .notification.warning .notification-icon {
+      color: var(--warning);
+    }
+
+    /* SOS Notification - Special */
+    .notification.sos {
+      border: 2px solid var(--danger);
+      background: linear-gradient(135deg, rgba(255, 51, 51, 0.1), var(--bg-panel));
+      animation: sos-notification 0.5s ease, sos-notification-pulse 1s ease infinite;
+    }
+
+    .notification.sos .notification-icon {
+      animation: sos-icon-shake 0.5s ease infinite;
+    }
+
+    @keyframes sos-notification {
+      0% { transform: scale(0.9); }
+      50% { transform: scale(1.05); }
+      100% { transform: scale(1); }
+    }
+
+    @keyframes sos-notification-pulse {
+      0%, 100% { box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5); }
+      50% { box-shadow: 0 10px 50px rgba(255, 51, 51, 0.5); }
+    }
+
+    @keyframes sos-icon-shake {
+      0%, 100% { transform: rotate(0deg); }
+      25% { transform: rotate(-10deg); }
+      75% { transform: rotate(10deg); }
+    }
+
+    /* Broadcast Alert Notification */
+    .notification.broadcast {
+      border: 2px solid var(--warning);
+      background: linear-gradient(135deg, rgba(255, 170, 0, 0.1), var(--bg-panel));
+    }
+
+    .notification.broadcast .notification-icon {
+      color: var(--warning);
+    }
+
+    /* Empty State */
+    .chat-empty {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      color: var(--text-dim);
+      text-align: center;
+      padding: 1rem;
+    }
+
+    .chat-empty-icon {
+      font-size: 2rem;
+      margin-bottom: 0.5rem;
+      opacity: 0.5;
+    }
+
+    .chat-empty-text {
+      font-size: 0.7rem;
+    }
+
+    /* Mobile Responsive */
+    @media (max-width: 768px) {
+      .sos-button {
+        bottom: 15px;
+        left: 15px;
+        width: 60px;
+        height: 60px;
+      }
+
+      .sos-button-text {
+        font-size: 0.75rem;
+      }
+
+      .sos-button-icon {
+        font-size: 1rem;
+      }
+
+      .chat-toggle {
+        bottom: 15px;
+        right: 15px;
+        width: 50px;
+        height: 50px;
+      }
+
+      .chat-modal {
+        bottom: 75px;
+        right: 15px;
+        left: 15px;
+        width: auto;
+        max-width: none;
+      }
+
+      .notifications-container {
+        left: 15px;
+        right: 15px;
+        top: 10px;
+      }
+
+      .notification {
+        min-width: auto;
+        max-width: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="ambient-glow"></div>
+  <div class="crt-overlay scanlines"></div>
+  <div class="crt-overlay vignette"></div>
+  <div class="noise"></div>
+
+  <!-- SOS Butonu -->
+  <button class="sos-button" id="sos-button" title="ACİL SOS SİNYALİ GÖNDER">
+    <span class="sos-button-icon">🆘</span>
+    <span class="sos-button-text">SOS</span>
+  </button>
+
+  <!-- Chat Toggle Button -->
+  <button class="chat-toggle" id="chat-toggle" title="Mesajlaşma">
+    💬
+    <span class="chat-badge hidden" id="chat-badge">0</span>
+  </button>
+
+  <!-- Chat Modal -->
+  <div class="chat-modal" id="chat-modal">
+    <div class="chat-modal-header">
+      <span class="chat-modal-title">💬 MESAJLAŞMA</span>
+      <button class="chat-modal-close" id="chat-modal-close">×</button>
+    </div>
+    <div class="chat-tabs">
+      <button class="chat-tab active" data-tab="messages">Mesajlar</button>
+      <button class="chat-tab" data-tab="users">Kullanıcılar</button>
+    </div>
+    <div class="chat-content active" id="chat-messages-content">
+      <div class="chat-messages" id="chat-messages">
+        <div class="chat-empty">
+          <div class="chat-empty-icon">💬</div>
+          <div class="chat-empty-text">Henüz mesaj yok</div>
+        </div>
+      </div>
+      <div class="chat-input-area">
+        <input type="text" class="chat-input" id="chat-input" placeholder="Mesaj yazın..." maxlength="500">
+        <button class="chat-send-btn" id="chat-send-btn">➤</button>
+      </div>
+    </div>
+    <div class="chat-content" id="chat-users-content">
+      <div class="chat-user-list" id="chat-user-list">
+        <div class="chat-empty">
+          <div class="chat-empty-icon">👥</div>
+          <div class="chat-empty-text">Kullanıcılar yükleniyor...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Notifications Container -->
+  <div class="notifications-container" id="notifications-container"></div>
+
+  <div class="container">
+    <!-- Header -->
+    <header class="header">
+      <div class="logo">EmercallPlus</div>
+      <div class="status-bar">
+        <div class="status-item">
+          <span class="status-dot" id="status-dot"></span>
+          <span id="status-text">BAĞLI DEĞİL</span>
+        </div>
+        <div class="status-item">
+          <span>GECİKME:</span>
+          <span id="latency">--</span>
+        </div>
+        <button class="admin-btn" id="admin-toggle">YÖNETİCİ</button>
+      </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main">
+      <!-- Left Panel -->
+      <aside class="panel">
+        <div class="panel-title">
+          <span>◆</span>
+          Bağlantı
+        </div>
+
+        <div id="join-panel" class="connection-form">
+          <div class="channel-display">
+            <div class="channel-name">--</div>
+            <div class="channel-freq">KANAL SEÇİNİZ</div>
+          </div>
+
+          <div class="input-group">
+            <label class="input-label">Çağrı Kodu</label>
+            <input type="text" id="username-input" class="input-field" placeholder="Çağrı işaretiniz..." maxlength="15" autocomplete="off">
+          </div>
+
+          <div style="margin-top: 0.5rem;">
+            <label class="input-label">Mevcut Kanallar</label>
+            <div id="channel-buttons" style="display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.5rem;">
+              <!-- Kanallar buraya oluşturulacak -->
+            </div>
+          </div>
+        </div>
+
+        <div id="connected-panel" class="connection-form hidden">
+          <div class="channel-display">
+            <div class="channel-name" id="current-channel">--</div>
+            <div class="channel-freq" id="current-freq">---.- MHz</div>
+          </div>
+
+          <div class="input-group">
+            <label class="input-label">Çağrı İşaretiniz</label>
+            <div class="input-field" id="your-callsign">--</div>
+          </div>
+
+          <div class="system-messages" id="system-messages">
+            <div class="system-msg info">Sistem hazır...</div>
+          </div>
+
+          <button id="leave-btn" class="btn btn-danger">Bağlantıyı Kes</button>
+        </div>
+      </aside>
+
+      <!-- Center Panel -->
+      <section class="center-panel">
+        <div class="visualizer-container">
+          <div class="visualizer-grid"></div>
+          <canvas id="visualizer" class="visualizer-canvas"></canvas>
+        </div>
+
+        <div class="ptt-container">
+          <div class="tx-indicator" id="tx-indicator">
+            <span class="tx-light"></span>
+            <span id="tx-text">HAZIR</span>
+          </div>
+
+          <button id="ptt-button" class="ptt-button" disabled>
+            <svg class="ptt-icon" viewBox="0 0 24 24">
+              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+            </svg>
+            <span class="ptt-label">KONUŞMAK İÇİN BAS</span>
+          </button>
+
+          <div class="ptt-hint">Konuşmak için <kbd>BOŞLUK</kbd> tuşuna basın</div>
+        </div>
+      </section>
+
+      <!-- Right Panel -->
+      <aside class="panel">
+        <div class="panel-title">
+          <span>◆</span>
+          Koordinat Sistemi
+        </div>
+
+        <!-- GPS Toggle -->
+        <div class="gps-toggle">
+          <div class="gps-toggle-label">
+            <span id="gps-status-icon">📡</span>
+            <span>Konum Paylaşımı</span>
+          </div>
+          <div class="gps-toggle-switch" id="gps-toggle"></div>
+        </div>
+
+        <!-- GPS Coordinates Display -->
+        <div class="gps-coordinates">
+          <div class="coord-row">
+            <span class="coord-label">ENLEM:</span>
+            <span class="coord-value no-data" id="gps-lat">--.----°</span>
+          </div>
+          <div class="coord-row">
+            <span class="coord-label">BOYLAM:</span>
+            <span class="coord-value no-data" id="gps-lon">--.----°</span>
+          </div>
+          <div class="coord-row">
+            <span class="coord-label">DURUM:</span>
+            <span class="coord-value no-data" id="gps-status">GPS Kapalı</span>
+          </div>
+        </div>
+
+        <!-- Location Tabs -->
+        <div class="location-tabs">
+          <button class="location-tab" data-tab="list">LİSTE</button>
+          <button class="location-tab active" data-tab="map">HARİTA</button>
+        </div>
+
+        <!-- List View -->
+        <div class="location-content" id="location-list-content">
+          <div class="users-list" id="users-list">
+            <div class="system-msg" style="text-align: center; padding: 1rem;">Menzilde birim yok</div>
+          </div>
+        </div>
+
+        <!-- Map View -->
+        <div class="location-content active" id="location-map-content">
+          <div id="gps-map"></div>
+          <div class="map-status" id="map-status">Harita başlatılmayı bekliyor...</div>
+        </div>
+
+        <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border-dark);">
+          <div class="panel-title">
+            <span>◆</span>
+            Sinyal Gücü
+          </div>
+          <div id="signal-bars">
+            <div class="signal-bar" data-level="1" style="height: 30%;"></div>
+            <div class="signal-bar" data-level="2" style="height: 50%;"></div>
+            <div class="signal-bar" data-level="3" style="height: 70%;"></div>
+            <div class="signal-bar" data-level="4" style="height: 90%;"></div>
+            <div class="signal-bar" data-level="5" style="height: 100%;"></div>
+          </div>
+          <div id="signal-text" style="font-size: 0.55rem; color: var(--text-dim); margin-top: 0.5rem;">SİNYAL YOK</div>
+        </div>
+      </aside>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <div class="footer-links">
+        <span>EmercallPlus Intranet PTT v3.0</span>
+        <span>//</span>
+        <span>GPS KOORDİNAT SİSTEMİ</span>
+      </div>
+      <div id="connection-info">ÇEVRİMDIŞI</div>
+    </footer>
+  </div>
+
+  <!-- Welcome Modal with Admin Token -->
+  <div id="welcome-modal" class="modal-overlay">
+    <div class="modal" style="max-width: 500px;">
+      <div class="modal-header">
+        <h2 class="modal-title">📡 EmercallPlus Intranet PTT</h2>
+      </div>
+      <div class="modal-body" style="text-align: center;">
+        <div style="font-size: 3rem; margin-bottom: 1rem;">📡</div>
+        <p style="color: var(--text-muted); margin-bottom: 1.5rem;">GPS Koordinat Takip Sistemi</p>
+
+        <div style="background: var(--bg-darker); padding: 1rem; border: 1px solid var(--border-dark); margin-bottom: 1rem;">
+          <div class="admin-section-title" style="justify-content: center;">🔑 YÖNETİCİ ANAHTARI</div>
+          <div id="display-admin-token" style="font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; color: var(--primary); word-break: break-all; padding: 0.5rem; background: var(--bg-panel); margin-top: 0.5rem;">
+            Yükleniyor...
+          </div>
+          <p style="font-size: 0.55rem; color: var(--text-dim); margin-top: 0.5rem;">
+            Bu anahtarı yönetici özelliklerine erişmek için kaydedin
+          </p>
+        </div>
+
+        <div style="font-size: 0.65rem; color: var(--text-muted);">
+          <p>Başlamak için bir kanal seçin ve çağrı kodunuzu girin.</p>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" id="welcome-modal-close">ANLAŞILDI</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Admin Modal -->
+  <div id="admin-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-header">
+        <h2 class="modal-title">⚙ YÖNETİCİ PANELİ</h2>
+        <button class="modal-close" id="admin-modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <!-- Admin Login -->
+        <div id="admin-login-section" class="admin-section">
+          <div class="admin-section-title">Kimlik Doğrulama</div>
+          <div class="input-group">
+            <label class="input-label">Yönetici Anahtarı</label>
+            <input type="password" id="admin-token-input" class="input-field" placeholder="Sunucu konsolundaki anahtarı girin..." autocomplete="off">
+          </div>
+          <button class="btn btn-primary" id="admin-login-btn" style="margin-top: 0.5rem; width: 100%;">Doğrula</button>
+          <p style="font-size: 0.6rem; color: var(--text-dim); margin-top: 0.5rem;">
+            Anahtar başlangıçta sunucu konsolunda gösterilir
+          </p>
+        </div>
+
+        <!-- Admin Controls (hidden until authenticated) -->
+        <div id="admin-controls" class="hidden">
+          <!-- Channel Management -->
+          <div class="admin-section">
+            <div class="admin-section-title">Kanal Yönetimi</div>
+            <div class="admin-input-row">
+              <input type="text" id="new-channel-name" class="input-field" placeholder="Kanal adı (örn. DELTA-4)" maxlength="15">
+              <input type="text" id="new-channel-password" class="input-field" placeholder="Şifre (opsiyonel)">
+            </div>
+            <button class="btn btn-primary btn-small" id="create-channel-btn">Kanal Oluştur</button>
+
+            <div class="admin-channel-list" id="admin-channel-list" style="margin-top: 1rem;">
+              <!-- Kanal listesi buraya doldurulacak -->
+            </div>
+          </div>
+
+          <!-- User Management -->
+          <div class="admin-section">
+            <div class="admin-section-title">Aktif Kullanıcılar</div>
+            <div class="users-list" id="admin-users-list" style="max-height: 150px;">
+              <div class="system-msg" style="text-align: center; padding: 0.5rem;">Çevrimiçi kullanıcı yok</div>
+            </div>
+          </div>
+
+          <!-- Ban Management -->
+          <div class="admin-section">
+            <div class="admin-section-title">Yasaklı Cihazlar</div>
+            <div class="ban-list" id="ban-list" style="max-height: 100px;">
+              <div class="system-msg" style="text-align: center; padding: 0.5rem;">Yasaklı cihaz yok</div>
+            </div>
+          </div>
+
+          <!-- Stats -->
+          <div class="admin-section">
+            <div class="admin-section-title">Sistem İstatistikleri</div>
+            <div class="stats-grid">
+              <div class="stat-item">
+                <div class="stat-value" id="stat-rooms">0</div>
+                <div class="stat-label">Aktif Odalar</div>
+              </div>
+              <div class="stat-item">
+                <div class="stat-value" id="stat-users">0</div>
+                <div class="stat-label">Toplam Kullanıcı</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" id="admin-modal-footer-close">Kapat</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Password Prompt Modal -->
+  <div id="password-modal" class="modal-overlay hidden">
+    <div class="modal" style="max-width: 400px;">
+      <div class="modal-header">
+        <h2 class="modal-title">🔒 KORUMALI KANAL</h2>
+        <button class="modal-close" id="password-modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="password-prompt-text">
+          Kanal şifresi:<br>
+          <span class="password-channel-name" id="password-channel-name">--</span>
+        </p>
+        <div class="input-group">
+          <input type="password" id="channel-password-input" class="input-field" placeholder="Kanal şifresini girin...">
+        </div>
+        <p id="password-error" class="system-msg error hidden" style="margin-top: 0.5rem;">Geçersiz şifre</p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" id="password-cancel-btn">İptal</button>
+        <button class="btn btn-primary" id="password-submit-btn">Katıl</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    'use strict';
+
+    // ==========================================
+    // EmercallPlus Intranet PTT v3.0
+    // GPS Koordinat Takip Sistemi
+    // Düşük gecikmeli P2P ses iletişimi
+    // Kullanıcı yönetimi ve yönetici paneli
+    // ==========================================
+
+    const CONFIG = {
+      rtcConfig: {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' }
+        ],
+        iceTransportPolicy: 'all',
+        bundlePolicy: 'max-bundle',
+        rtcpMuxPolicy: 'require',
+        sdpSemantics: 'unified-plan'
+      },
+      audioConstraints: {
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+          sampleRate: 8000,
+          channelCount: 1,
+          latency: 0
+        }
+      }
+    };
+
+    // State
+    const state = {
+      ws: null,
+      localStream: null,
+      audioContext: null,
+      analyser: null,
+      peerConnections: new Map(),
+      peers: new Map(),
+      myId: null,
+      currentRoom: null,
+      myUsername: null,
+      isTransmitting: false,
+      isConnected: false,
+      pendingJoin: null,
+      visualizerRunning: false,
+      selectedChannel: null,
+      selectedChannelNeedsPassword: false,
+      isAdmin: false,
+      adminToken: null,
+      availableChannels: new Map(),
+      statsInterval: null,
+      // GPS State
+      gpsEnabled: false,
+      currentLatitude: null,
+      currentLongitude: null,
+      locationWatchId: null,
+      locationUpdateInterval: null,
+      map: null,
+      mapMarkers: new Map(),
+      userLocations: new Map(),
+      // Chat State
+      chatOpen: false,
+      chatMessages: [],
+      selectedChatUser: null,
+      unreadCount: 0
+    };
+
+    // DOM Elements Cache
+    const dom = {
+      statusDot: document.getElementById('status-dot'),
+      statusText: document.getElementById('status-text'),
+      latencyDisplay: document.getElementById('latency'),
+      usernameInput: document.getElementById('username-input'),
+      leaveBtn: document.getElementById('leave-btn'),
+      joinPanel: document.getElementById('join-panel'),
+      connectedPanel: document.getElementById('connected-panel'),
+      currentChannel: document.getElementById('current-channel'),
+      currentFreq: document.getElementById('current-freq'),
+      yourCallsign: document.getElementById('your-callsign'),
+      systemMessages: document.getElementById('system-messages'),
+      pttButton: document.getElementById('ptt-button'),
+      txIndicator: document.getElementById('tx-indicator'),
+      txText: document.getElementById('tx-text'),
+      usersList: document.getElementById('users-list'),
+      connectionInfo: document.getElementById('connection-info'),
+      visualizerCanvas: document.getElementById('visualizer'),
+      visualizerCtx: document.getElementById('visualizer').getContext('2d', { alpha: true }),
+      adminToggle: document.getElementById('admin-toggle'),
+      adminModal: document.getElementById('admin-modal'),
+      adminModalClose: document.getElementById('admin-modal-close'),
+      adminModalFooterClose: document.getElementById('admin-modal-footer-close'),
+      adminLoginSection: document.getElementById('admin-login-section'),
+      adminControls: document.getElementById('admin-controls'),
+      adminTokenInput: document.getElementById('admin-token-input'),
+      adminLoginBtn: document.getElementById('admin-login-btn'),
+      adminChannelList: document.getElementById('admin-channel-list'),
+      adminUsersList: document.getElementById('admin-users-list'),
+      banList: document.getElementById('ban-list'),
+      newChannelName: document.getElementById('new-channel-name'),
+      newChannelPassword: document.getElementById('new-channel-password'),
+      createChannelBtn: document.getElementById('create-channel-btn'),
+      passwordModal: document.getElementById('password-modal'),
+      passwordModalClose: document.getElementById('password-modal-close'),
+      passwordCancelBtn: document.getElementById('password-cancel-btn'),
+      passwordSubmitBtn: document.getElementById('password-submit-btn'),
+      passwordChannelName: document.getElementById('password-channel-name'),
+      passwordInput: document.getElementById('channel-password-input'),
+      passwordError: document.getElementById('password-error'),
+      welcomeModal: document.getElementById('welcome-modal'),
+      welcomeModalClose: document.getElementById('welcome-modal-close'),
+      displayAdminToken: document.getElementById('display-admin-token'),
+      signalBars: document.querySelectorAll('#signal-bars .signal-bar'),
+      signalText: document.getElementById('signal-text'),
+      // SOS & Chat Elements
+      sosButton: document.getElementById('sos-button'),
+      chatToggle: document.getElementById('chat-toggle'),
+      chatModal: document.getElementById('chat-modal'),
+      chatModalClose: document.getElementById('chat-modal-close'),
+      chatBadge: document.getElementById('chat-badge'),
+      chatMessages: document.getElementById('chat-messages'),
+      chatInput: document.getElementById('chat-input'),
+      chatSendBtn: document.getElementById('chat-send-btn'),
+      chatUserList: document.getElementById('chat-user-list'),
+      notificationsContainer: document.getElementById('notifications-container'),
+      // GPS DOM Elements
+      gpsToggle: document.getElementById('gps-toggle'),
+      gpsStatusIcon: document.getElementById('gps-status-icon'),
+      gpsLat: document.getElementById('gps-lat'),
+      gpsLon: document.getElementById('gps-lon'),
+      gpsStatus: document.getElementById('gps-status'),
+      locationTabs: document.querySelectorAll('.location-tab'),
+      locationListContent: document.getElementById('location-list-content'),
+      locationMapContent: document.getElementById('location-map-content'),
+      gpsMap: document.getElementById('gps-map'),
+      mapStatus: document.getElementById('map-status')
+    };
+
+    // ==========================================
+    // Yardımcı Fonksiyonlar
+    // ==========================================
+
+    function setStatus(status, text) {
+      dom.statusDot.className = 'status-dot ' + (status === 'connected' ? 'active' : status);
+      dom.statusText.textContent = text;
+    }
+
+    function addSystemMessage(msg, type = 'info') {
+      const div = document.createElement('div');
+      div.className = `system-msg ${type}`;
+      div.textContent = `[${new Date().toLocaleTimeString('tr-TR')}] ${msg}`;
+      dom.systemMessages.appendChild(div);
+      // Scroll to bottom efficiently
+      dom.systemMessages.scrollTop = dom.systemMessages.scrollHeight;
+
+      // Ayrıca chat mesajları paneline de ekle
+      addSystemMessageToChat(msg, type);
+
+      // Limit messages to prevent memory issues
+      while (dom.systemMessages.children.length > 50) {
+        dom.systemMessages.removeChild(dom.systemMessages.firstChild);
+      }
+    }
+
+    // Sistem mesajını chat paneline ekle
+    function addSystemMessageToChat(msg, type = 'info') {
+      // Boş mesaj kontrolü ve temizleme
+      if (dom.chatMessages.querySelector('.chat-empty')) {
+        dom.chatMessages.innerHTML = '';
+      }
+
+      const messageEl = document.createElement('div');
+      messageEl.className = 'chat-message system';
+
+      const icons = {
+        info: 'ℹ️',
+        success: '✓',
+        error: '⚠️',
+        warning: '⚠️'
+      };
+
+      const time = new Date().toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+
+      messageEl.innerHTML = `
+        <div class="chat-message-text">${icons[type] || 'ℹ️'} ${escapeHtml(msg)}</div>
+        <div class="chat-message-time">${time}</div>
+      `;
+
+      dom.chatMessages.appendChild(messageEl);
+      dom.chatMessages.scrollTop = dom.chatMessages.scrollHeight;
+    }
+
+    function updateConnectionInfo(count) {
+      dom.connectionInfo.textContent = `${count} BİRİM AKTİF`;
+    }
+
+    function updateSignalStrength(level) {
+      dom.signalBars.forEach((bar, index) => {
+        bar.style.background = index < level
+          ? (level >= 4 ? 'var(--status-active)' : 'var(--primary)')
+          : 'var(--status-inactive)';
+      });
+
+      const labels = ['SİNYAL YOK', 'ZAYIF', 'ORTA', 'İYİ', 'MÜKEMMEL', 'YEREL'];
+      dom.signalText.textContent = labels[level] || 'SİNYAL YOK';
+    }
+
+    function send(type, data) {
+      if (state.ws?.readyState === 1) {
+        state.ws.send(JSON.stringify({ type, ...data }));
+      }
+    }
+
+    function getDeviceId() {
+      let deviceId = localStorage.getItem('emercallplus_cihaz_id');
+      if (!deviceId) {
+        deviceId = 'cih_' + Math.random().toString(36).substring(2, 15) + Date.now().toString(36);
+        localStorage.setItem('emercallplus_cihaz_id', deviceId);
+      }
+      return deviceId;
+    }
+
+    // ==========================================
+    // GPS / Koordinat Sistemi
+    // ==========================================
+
+    // Haversine formülü ile mesafe hesaplama (metre cinsinden)
+    function calculateDistance(lat1, lon1, lat2, lon2) {
+      if (!lat1 || !lon1 || !lat2 || !lon2) return null;
+      const R = 6371e3; // Dünya yarıçapı (metre)
+      const φ1 = lat1 * Math.PI / 180;
+      const φ2 = lat2 * Math.PI / 180;
+      const Δφ = (lat2 - lat1) * Math.PI / 180;
+      const Δλ = (lon2 - lon1) * Math.PI / 180;
+
+      const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+                Math.cos(φ1) * Math.cos(φ2) *
+                Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+      return R * c; // metre
+    }
+
+    // Mesafeyi okunabilir formatta döndür
+    function formatDistance(meters) {
+      if (!meters) return '--';
+      if (meters < 1000) {
+        return `${Math.round(meters)} m`;
+      } else {
+        return `${(meters / 1000).toFixed(1)} km`;
+      }
+    }
+
+    // Koordinatları formatla
+    function formatCoordinate(value, type) {
+      if (value === null || value === undefined) return '--.----°';
+      const direction = type === 'lat' ? (value >= 0 ? 'N' : 'S') : (value >= 0 ? 'E' : 'W');
+      return `${Math.abs(value).toFixed(4)}° ${direction}`;
+    }
+
+    // GPS'i başlat
+    function initGPS() {
+      if (!navigator.geolocation) {
+        dom.gpsStatus.textContent = 'GPS Desteklenmiyor';
+        return false;
+      }
+
+      // Toggle event listener
+      dom.gpsToggle.addEventListener('click', toggleGPS);
+
+      // Tab switching
+      dom.locationTabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+          const tabName = tab.dataset.tab;
+          switchLocationTab(tabName);
+        });
+      });
+
+      return true;
+    }
+
+    // GPS aç/kapa
+    function toggleGPS() {
+      if (state.gpsEnabled) {
+        stopGPS();
+      } else {
+        startGPS();
+      }
+    }
+
+    // GPS'i başlat
+    function startGPS() {
+      if (!navigator.geolocation) {
+        addSystemMessage('Tarayiciniz GPS desteklemiyor', 'error');
+        return;
+      }
+
+      dom.gpsToggle.classList.add('active');
+      dom.gpsStatusIcon.textContent = '📡';
+      dom.gpsStatus.textContent = 'Baslatiliyor...';
+      state.gpsEnabled = true;
+
+      // İlk konumu al - mobil için daha uzun timeout ve yüksek accuracy
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          state.currentLatitude = position.coords.latitude;
+          state.currentLongitude = position.coords.longitude;
+          updateGPSCoordinates();
+          sendLocationUpdate();
+          addSystemMessage('GPS konumu alindi', 'success');
+
+          // Harita varsa, haritayı güncelle
+          if (state.map) {
+            state.map.setView([state.currentLatitude, state.currentLongitude], 15);
+            addOrUpdateMapMarker(state.myId, state.myUsername, state.currentLatitude, state.currentLongitude, true);
+            dom.mapStatus.textContent = 'Konumunuz haritada gösteriliyor';
+          }
+
+          // Periyodik güncellemeleri başlat (10 saniye)
+          state.locationUpdateInterval = setInterval(() => {
+            if (state.gpsEnabled && state.isConnected) {
+              sendLocationUpdate();
+            }
+          }, 10000);
+        },
+        (error) => {
+          console.error('GPS hatasi:', error);
+          let errorMsg = 'GPS hatasi';
+          switch (error.code) {
+            case error.PERMISSION_DENIED:
+              errorMsg = 'GPS izni reddedildi';
+              break;
+            case error.POSITION_UNAVAILABLE:
+              errorMsg = 'Konum bilgisi mevcut değil';
+              break;
+            case error.TIMEOUT:
+              errorMsg = 'GPS zaman aşımı';
+              break;
+          }
+          dom.gpsStatus.textContent = errorMsg;
+          dom.gpsToggle.classList.remove('active');
+          state.gpsEnabled = false;
+          addSystemMessage(errorMsg, 'error');
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 60000
+        }
+      );
+    }
+
+    // GPS'i durdur
+    function stopGPS() {
+      state.gpsEnabled = false;
+      dom.gpsToggle.classList.remove('active');
+      dom.gpsStatusIcon.textContent = '📴';
+      dom.gpsStatus.textContent = 'GPS Kapalı';
+      dom.gpsLat.classList.add('no-data');
+      dom.gpsLon.classList.add('no-data');
+
+      if (state.locationUpdateInterval) {
+        clearInterval(state.locationUpdateInterval);
+        state.locationUpdateInterval = null;
+      }
+
+      // Konum bilgisi olmadığını bildir
+      if (state.isConnected) {
+        send('location-update', {
+          latitude: null,
+          longitude: null
+        });
+      }
+    }
+
+    // GPS koordinatlarını güncelle
+    function updateGPSCoordinates() {
+      if (state.currentLatitude !== null && state.currentLongitude !== null) {
+        dom.gpsLat.textContent = formatCoordinate(state.currentLatitude, 'lat');
+        dom.gpsLon.textContent = formatCoordinate(state.currentLongitude, 'lon');
+        dom.gpsLat.classList.remove('no-data');
+        dom.gpsLon.classList.remove('no-data');
+        dom.gpsStatus.textContent = 'GPS Aktif';
+        dom.gpsStatusIcon.textContent = '📡';
+      }
+    }
+
+    // Konum güncellemesini sunucuya gönder
+    function sendLocationUpdate() {
+      if (state.isConnected && state.currentLatitude && state.currentLongitude) {
+        send('location-update', {
+          latitude: state.currentLatitude,
+          longitude: state.currentLongitude
+        });
+      }
+    }
+
+    // Konum sekmesini değiştir
+    function switchLocationTab(tabName) {
+      console.log('switchLocationTab çağrıldı:', tabName);
+      console.log('locationTabs:', dom.locationTabs);
+      console.log('locationListContent:', dom.locationListContent);
+      console.log('locationMapContent:', dom.locationMapContent);
+
+      dom.locationTabs.forEach(t => t.classList.remove('active'));
+      const targetTab = document.querySelector(`.location-tab[data-tab="${tabName}"]`);
+      if (targetTab) {
+        targetTab.classList.add('active');
+      }
+
+      dom.locationListContent.classList.remove('active');
+      dom.locationMapContent.classList.remove('active');
+
+      if (tabName === 'list') {
+        dom.locationListContent.classList.add('active');
+        console.log('Liste görünümü aktif');
+      } else {
+        dom.locationMapContent.classList.add('active');
+        console.log('Harita görünümü aktif');
+        // Haritayı ilk kez görüntülenirse başlat
+        if (!state.map) {
+          console.log('Harita başlatılıyor...');
+          initMap();
+        } else {
+          // Harita boyutunu güncelle (Leaflet için gerekli)
+          setTimeout(() => {
+            if (state.map) {
+              state.map.invalidateSize();
+            }
+          }, 100);
+        }
+
+        // GPS kapalıysa ve konum izni yoksa, otomatik olarak iste
+        if (!state.gpsEnabled && !state.currentLatitude) {
+          requestLocationQuietly();
+        }
+      }
+    }
+
+    // Sessizce konum izni iste (GPS'i başlatmadan)
+    function requestLocationQuietly() {
+      if (!navigator.geolocation) return;
+
+      dom.mapStatus.textContent = 'Konum alınıyor...';
+
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          state.currentLatitude = position.coords.latitude;
+          state.currentLongitude = position.coords.longitude;
+          updateGPSCoordinates();
+
+          // Haritada göster
+          if (state.map) {
+            state.map.setView([state.currentLatitude, state.currentLongitude], 15);
+            addOrUpdateMapMarker(state.myId, state.myUsername, state.currentLatitude, state.currentLongitude, true);
+          }
+
+          dom.mapStatus.textContent = 'Konumunuz haritada gösteriliyor';
+        },
+        (error) => {
+          console.error('Konum alma hatası:', error);
+          dom.mapStatus.textContent = 'Konum alınamadı - Tarayıcı izin vermedi';
+        },
+        {
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 60000
+        }
+      );
+    }
+
+    // Leaflet haritasını başlat
+    function initMap() {
+      console.log('=== initMap çağrıldı ===');
+
+      try {
+        if (typeof L === 'undefined') {
+          console.error('Leaflet yüklenmedi');
+          if (dom.mapStatus) dom.mapStatus.textContent = 'Leaflet yüklenmedi!';
+          return;
+        }
+
+        if (state.map) {
+          console.log('Harita zaten başlatılmış');
+          state.map.invalidateSize();
+          return;
+        }
+
+        const mapContainer = document.getElementById('gps-map');
+        if (!mapContainer) {
+          console.error('Map container bulunamadı');
+          return;
+        }
+
+        console.log('Container boyutu:', mapContainer.offsetWidth, 'x', mapContainer.offsetHeight);
+
+        // Basit harita oluştur
+        state.map = L.map('gps-map').setView([41.0082, 28.9784], 13);
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          maxZoom: 19
+        }).addTo(state.map);
+
+        if (dom.mapStatus) dom.mapStatus.textContent = 'Harita aktif';
+
+        console.log('Harita başlatıldı');
+      } catch (e) {
+        console.error('Hata:', e);
+        if (dom.mapStatus) dom.mapStatus.textContent = 'HATA: ' + e.message;
+      }
+    }
+
+    // Haritaya işaretçi ekle veya güncelle
+    function addOrUpdateMapMarker(userId, username, lat, lon, isSelf = false) {
+      if (!state.map) return;
+
+      // Var olan işaretçiyi kontrol et
+      const existingMarker = state.mapMarkers.get(userId);
+      if (existingMarker) {
+        // İşaretçiyi güncelle
+        existingMarker.setLatLng([lat, lon]);
+        existingMarker.getPopup().setContent(`
+          <div style="font-family: 'JetBrains Mono', monospace;">
+            <strong>${username}</strong><br>
+            ${formatCoordinate(lat, 'lat')}<br>
+            ${formatCoordinate(lon, 'lon')}
+          </div>
+        `);
+      } else {
+        // Yeni işaretçi oluştur
+        const markerColor = isSelf ? '#00ff88' : '#ff6b00';
+        const markerIcon = L.divIcon({
+          className: 'custom-marker',
+          html: `<div style="
+            width: 12px;
+            height: 12px;
+            background: ${markerColor};
+            border: 2px solid white;
+            border-radius: 50%;
+            box-shadow: 0 0 10px ${markerColor};
+          "></div>`,
+          iconSize: [12, 12],
+          iconAnchor: [6, 6]
+        });
+
+        const marker = L.marker([lat, lon], { icon: markerIcon }).addTo(state.map);
+        marker.bindPopup(`
+          <div style="font-family: 'JetBrains Mono', monospace;">
+            <strong>${username}</strong><br>
+            ${formatCoordinate(lat, 'lat')}<br>
+            ${formatCoordinate(lon, 'lon')}
+          </div>
+        `);
+        state.mapMarkers.set(userId, marker);
+      }
+    }
+
+    // Haritadan işaretçiyi kaldır
+    function removeMapMarker(userId) {
+      const marker = state.mapMarkers.get(userId);
+      if (marker) {
+        state.map.removeLayer(marker);
+        state.mapMarkers.delete(userId);
+      }
+    }
+
+    // Konum listesini güncelle
+    function updateLocationList() {
+      const listContainer = dom.usersList;
+
+      if (state.userLocations.size === 0 && !state.gpsEnabled) {
+        listContainer.innerHTML = '<div class="system-msg" style="text-align: center; padding: 1rem;">Menzilde birim yok</div>';
+        return;
+      }
+
+      listContainer.innerHTML = '';
+
+      // Kendi konumunu ekle (GPS açık ise)
+      if (state.gpsEnabled && state.currentLatitude && state.currentLongitude) {
+        const selfItem = createUserLocationItem({
+          userId: state.myId,
+          username: state.myUsername + ' (SİZ)',
+          latitude: state.currentLatitude,
+          longitude: state.currentLongitude,
+          distance: 0
+        });
+        listContainer.appendChild(selfItem);
+      }
+
+      // Diğer kullanıcıların konumlarını ekle
+      state.userLocations.forEach((location, userId) => {
+        const distance = calculateDistance(
+          state.currentLatitude, state.currentLongitude,
+          location.latitude, location.longitude
+        );
+        const item = createUserLocationItem({
+          userId,
+          username: location.username,
+          latitude: location.latitude,
+          longitude: location.longitude,
+          distance
+        });
+        listContainer.appendChild(item);
+      });
+    }
+
+    // Kullanıcı konum öğesi oluştur
+    function createUserLocationItem(data) {
+      const item = document.createElement('div');
+      item.className = 'user-location-item';
+      item.innerHTML = `
+        <div class="user-location-header">
+          <span class="user-location-name">${data.username}</span>
+          <span class="user-location-distance">${formatDistance(data.distance)}</span>
+        </div>
+        <div class="user-location-coords">
+          ${formatCoordinate(data.latitude, 'lat')} / ${formatCoordinate(data.longitude, 'lon')}
+        </div>
+      `;
+      return item;
+    }
+
+    // ==========================================
+    // Kanal Yönetimi
+    // ==========================================
+
+    async function loadChannelsFromServer() {
+      try {
+        const response = await fetch('/api/channels');
+        if (response.ok) {
+          const channels = await response.json();
+          state.availableChannels.clear();
+          channels.forEach(ch => {
+            state.availableChannels.set(ch.name, {
+              name: ch.name,
+              hasPassword: !!ch.password,
+              users: 0
+            });
+          });
+        }
+      } catch (e) {
+        console.error('Kanallar yüklenemedi:', e);
+        ['ALFA-1', 'BRAVO-2', 'CHARLİ-3'].forEach(name => {
+          state.availableChannels.set(name, { name, hasPassword: false, users: 0 });
+        });
+      }
+    }
+
+    function initializeChannels() {
+      const container = document.getElementById('channel-buttons');
+      container.innerHTML = '';
+
+      state.availableChannels.forEach((channel, name) => {
+        const btn = document.createElement('div');
+        btn.className = 'channel-btn btn';
+        btn.dataset.channel = name;
+        btn.id = `channel-btn-${name}`;
+        btn.innerHTML = `
+          <span class="channel-btn-name">${name}</span>
+          <div class="channel-btn-info">
+            ${channel.hasPassword ? '<span class="channel-btn-locked">🔒</span>' : ''}
+          </div>
+        `;
+
+        btn.addEventListener('click', () => selectChannel(name, btn));
+
+        // Double-tap to join on mobile
+        let lastTap = 0;
+        btn.addEventListener('touchend', (e) => {
+          const currentTime = Date.now();
+          const tapLength = currentTime - lastTap;
+          if (tapLength < 300 && tapLength > 0) {
+            e.preventDefault();
+            selectChannel(name, btn);
+            setTimeout(() => tryJoinChannel(), 100);
+          }
+          lastTap = currentTime;
+        });
+
+        container.appendChild(btn);
+      });
+    }
+
+    function selectChannel(name, btn) {
+      state.selectedChannel = name;
+      const channel = state.availableChannels.get(name);
+      state.selectedChannelNeedsPassword = channel?.hasPassword || false;
+
+      document.querySelectorAll('.channel-btn').forEach(b => b.classList.remove('selected'));
+      btn.classList.add('selected');
+
+      const freq = (name.split('').reduce((a, c) => a + c.charCodeAt(0), 0) % 100 + 400) / 10;
+      document.querySelector('#join-panel .channel-name').textContent = name;
+      document.querySelector('#join-panel .channel-freq').textContent = `${freq.toFixed(1)} MHz`;
+
+      const existingHint = document.querySelector('.channel-btn-hint');
+      if (existingHint) existingHint.remove();
+
+      const hint = document.createElement('div');
+      hint.className = 'channel-btn-hint';
+      hint.textContent = 'Katılmak için ENTER tuşuna basın';
+      document.getElementById('channel-buttons').appendChild(hint);
+    }
+
+    function updateChannelButton(channelName, userCount) {
+      const btn = document.getElementById(`channel-btn-${channelName}`);
+      if (btn) {
+        const countSpan = btn.querySelector('.channel-btn-users');
+        if (!countSpan) {
+          const info = btn.querySelector('.channel-btn-info');
+          const span = document.createElement('span');
+          span.className = 'channel-btn-users';
+          info.insertBefore(span, info.firstChild);
+        }
+        const newCountSpan = btn.querySelector('.channel-btn-users');
+        newCountSpan.textContent = `${userCount} ÇEVRİMİÇİ`;
+        const channel = state.availableChannels.get(channelName);
+        if (channel) channel.users = userCount;
+      }
+    }
+
+    function tryJoinChannel() {
+      if (!state.selectedChannel) {
+        addSystemMessage('Önce bir kanal seçin', 'error');
+        return;
+      }
+
+      const channel = state.availableChannels.get(state.selectedChannel);
+      if (channel?.hasPassword) {
+        dom.passwordChannelName.textContent = state.selectedChannel;
+        dom.passwordInput.value = '';
+        dom.passwordError.classList.add('hidden');
+        dom.passwordModal.classList.remove('hidden');
+        dom.passwordInput.focus();
+      } else {
+        joinChannel();
+      }
+    }
+
+    // ==========================================
+    // WebSocket Signaling
+    // ==========================================
+
+    function connectWebSocket() {
+      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const port = location.port || (location.protocol === 'https:' ? '' : '3000');
+      const wsUrl = `${protocol}//${location.hostname}${port ? ':' + port : ''}`;
+      addSystemMessage(`Bağlanıyor: ${wsUrl}`, 'info');
+
+      state.ws = new WebSocket(wsUrl);
+
+      state.ws.onopen = () => {
+        addSystemMessage('Sunucuya bağlandı', 'success');
+        if (state.pendingJoin) {
+          send('join', state.pendingJoin);
+          state.pendingJoin = null;
+        }
+      };
+
+      state.ws.onmessage = async (e) => {
+        try {
+          const msg = JSON.parse(e.data);
+          handleMessage(msg);
+        } catch (err) {
+          console.error('Mesaj işleme hatası:', err);
+        }
+      };
+
+      state.ws.onclose = () => {
+        setStatus('disconnected', 'BAĞLI DEĞİL');
+        state.isConnected = false;
+        addSystemMessage('Bağlantı koptu', 'error');
+        disconnect();
+      };
+
+      state.ws.onerror = () => {
+        setStatus('disconnected', 'HATA');
+        addSystemMessage('Bağlantı başarısız', 'error');
+        state.pendingJoin = null;
+      };
+    }
+
+    async function handleMessage(msg) {
+      switch (msg.type) {
+        case 'room-joined':
+          state.myId = msg.yourId;
+          state.currentRoom = msg.roomId;
+          state.isConnected = true;
+          state.isAdmin = msg.isAdmin || false;
+          setStatus('connected', 'ÇEVRİMİÇİ');
+          addSystemMessage(`Kanala bağlandı: ${msg.roomId}`, 'success');
+
+          const userCount = msg.userCount || msg.users.length + 1;
+          updateConnectionInfo(userCount);
+          updateChannelButton(msg.roomId, userCount);
+          updateChannelDisplay(msg.roomId);
+
+          showConnectedPanel();
+
+          if (state.audioContext && !state.visualizerRunning) {
+            startVisualizer();
+            state.visualizerRunning = true;
+          }
+
+          for (const user of msg.users) {
+            addUser(user);
+            await createPeerConnection(user.id, true);
+          }
+          break;
+
+        case 'user-joined':
+          addSystemMessage(`${msg.username} kanala katıldı`, 'info');
+          addUser({ id: msg.userId, username: msg.username });
+          const joinedCount = state.peers.size + 1;
+          updateConnectionInfo(joinedCount);
+          if (state.currentRoom && msg.userCount) {
+            updateChannelButton(state.currentRoom, msg.userCount);
+          }
+          await createPeerConnection(msg.userId, false);
+          break;
+
+        case 'user-left':
+          addSystemMessage('Kullanıcı kanaldan ayrıldı', 'info');
+          removeUser(msg.userId);
+          closePeerConnection(msg.userId);
+          const leftCount = state.peers.size + 1;
+          updateConnectionInfo(leftCount);
+          if (state.currentRoom && msg.userCount !== undefined) {
+            updateChannelButton(state.currentRoom, msg.userCount);
+          }
+          break;
+
+        case 'offer':
+          await handleOffer(msg);
+          break;
+
+        case 'answer':
+          await handleAnswer(msg);
+          break;
+
+        case 'ice-candidate':
+          handleIceCandidate(msg);
+          break;
+
+        case 'user-speaking':
+          setUserSpeaking(msg.userId, msg.speaking);
+          break;
+
+        case 'tx-busy':
+          addSystemMessage('Kanal meşgul - başka biri konuşuyor', 'error');
+          stopTransmitting();
+          break;
+
+        case 'tx-freed':
+          addSystemMessage('Kanal kullanılabilir', 'info');
+          break;
+
+        case 'error':
+          addSystemMessage(msg.message || 'Hata oluştu', 'error');
+          if (msg.message.includes('password') || msg.message.includes('şifre')) {
+            dom.passwordError.classList.remove('hidden');
+          }
+          break;
+
+        case 'admin-auth-response':
+          if (msg.valid) {
+            dom.adminLoginSection.classList.add('hidden');
+            dom.adminControls.classList.remove('hidden');
+            dom.adminToggle.classList.add('active');
+            loadAdminData();
+          } else {
+            addSystemMessage('Geçersiz yönetici anahtarı', 'error');
+          }
+          break;
+
+        case 'channel-created':
+          await loadChannelsFromServer();
+          initializeChannels();
+          addSystemMessage(`Kanal oluşturuldu: ${msg.channel.name}`, 'success');
+          break;
+
+        case 'channel-deleted':
+          await loadChannelsFromServer();
+          initializeChannels();
+          addSystemMessage(`Kanal silindi: ${msg.channel}`, 'info');
+          break;
+
+        case 'channel-password-changed':
+          await loadChannelsFromServer();
+          initializeChannels();
+          break;
+
+        case 'user-location-update':
+          // Kullanıcı konum güncellemesi
+          if (msg.latitude && msg.longitude) {
+            state.userLocations.set(msg.userId, {
+              username: msg.username,
+              latitude: msg.latitude,
+              longitude: msg.longitude,
+              timestamp: msg.timestamp
+            });
+
+            // Listeleri güncelle
+            updateLocationList();
+            renderUsers();
+
+            // Harita varsa işaretçiyi güncelle
+            if (state.map && state.mapMarkers) {
+              addOrUpdateMapMarker(msg.userId, msg.username, msg.latitude, msg.longitude, false);
+            }
+          } else {
+            // Konum bilgisi iptal edildi
+            state.userLocations.delete(msg.userId);
+            removeMapMarker(msg.userId);
+            updateLocationList();
+            renderUsers();
+          }
+          break;
+
+        case 'room-locations':
+          // Odadaki tüm konumlar
+          msg.locations.forEach(loc => {
+            if (loc.userId !== state.myId) {
+              state.userLocations.set(loc.userId, {
+                username: loc.username,
+                latitude: loc.latitude,
+                longitude: loc.longitude,
+                timestamp: loc.timestamp
+              });
+
+              if (state.map) {
+                addOrUpdateMapMarker(loc.userId, loc.username, loc.latitude, loc.longitude, false);
+              }
+            }
+          });
+          updateLocationList();
+          renderUsers();
+          break;
+
+        case 'chat-message':
+          // Kullanıcıdan mesaj geldi
+          handleChatMessage(msg);
+          break;
+
+        case 'chat-sent':
+          // Mesaj gönderildi onayı
+          if (msg.broadcast) {
+            // Broadcast mesajı gönderildi
+            addSystemMessage(`📢 Tüm kanala: ${msg.content}`, 'info');
+          } else {
+            // Özel mesaj gönderildi
+            addChatMessage({
+              from: state.myId,
+              fromUsername: state.myUsername,
+              content: msg.content,
+              timestamp: msg.timestamp
+            }, true);
+          }
+          break;
+
+        case 'broadcast-alert':
+          // Acil afet uyarısı
+          handleBroadcastAlert(msg);
+          break;
+
+        case 'sos-alert':
+          // SOS acil durum sinyali
+          handleSOSAlert(msg);
+          break;
+
+        case 'users-list':
+          // Kullanıcı listesi
+          renderChatUserList(msg.users, msg.yourId);
+          break;
+
+        case 'sos-sent':
+          // SOS gönderildi onayı
+          showNotification('success', 'SOS Gönderildi', 'SOS sinyaliniz tüm kullanıcılara iletildi.');
+          addSystemMessage('🆘 SOS sinyali gönderildi', 'info');
+          break;
+      }
+    }
+
+    // ==========================================
+    // WebRTC Peer Connections
+    // ==========================================
+
+    // ==========================================
+    // MESAJLAŞMA & SOS SİSTEMİ
+    // ==========================================
+
+    // Bildirim göster
+    function showNotification(type, title, message, duration = 5000) {
+      const notification = document.createElement('div');
+      notification.className = `notification ${type}`;
+
+      const icons = {
+        info: 'ℹ️',
+        success: '✓',
+        error: '✕',
+        warning: '⚠️',
+        sos: '🆘',
+        broadcast: '📢'
+      };
+
+      notification.innerHTML = `
+        <div class="notification-icon">${icons[type] || icons.info}</div>
+        <div class="notification-content">
+          <div class="notification-title">${title}</div>
+          <div class="notification-message">${message}</div>
+        </div>
+        <button class="notification-close">×</button>
+      `;
+
+      const closeBtn = notification.querySelector('.notification-close');
+      closeBtn.addEventListener('click', () => removeNotification(notification));
+
+      dom.notificationsContainer.appendChild(notification);
+
+      // Sesli uyarı (SOS ve broadcast için)
+      if (type === 'sos' || type === 'broadcast') {
+        playAlertSound(type === 'sos' ? 'sos' : 'broadcast');
+      }
+
+      // Otomatik kapatma
+      if (duration > 0) {
+        setTimeout(() => removeNotification(notification), duration);
+      }
+
+      return notification;
+    }
+
+    function removeNotification(notification) {
+      notification.classList.add('removing');
+      setTimeout(() => notification.remove(), 300);
+    }
+
+    // Alarm sesi çal
+    function playAlertSound(type) {
+      try {
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = audioContext.createOscillator();
+        const gainNode = audioContext.createGain();
+
+        oscillator.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+
+        if (type === 'sos') {
+          // SOS sinyali: üç kısa, üç uzun, üç kısa
+          const pattern = [200, 200, 200, 400, 400, 400, 200, 200, 200];
+          let time = audioContext.currentTime;
+
+          pattern.forEach((duration, i) => {
+            oscillator.frequency.setValueAtTime(i % 2 === 0 ? 800 : 600, time);
+            oscillator.type = 'square';
+            gainNode.gain.setValueAtTime(0.1, time);
+            gainNode.gain.setValueAtTime(0, time + duration / 1000);
+            time += duration / 1000 + 0.05;
+          });
+
+          oscillator.start(audioContext.currentTime);
+          oscillator.stop(time);
+        } else {
+          // Broadcast uyarı sesi
+          oscillator.frequency.setValueAtTime(600, audioContext.currentTime);
+          oscillator.type = 'sine';
+          gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
+          oscillator.start();
+          oscillator.stop(audioContext.currentTime + 0.3);
+        }
+      } catch (e) {
+        console.error('Ses çalma hatası:', e);
+      }
+    }
+
+    // Chat modal aç/kapat
+    function toggleChat() {
+      state.chatOpen = !state.chatOpen;
+      dom.chatModal.classList.toggle('active', state.chatOpen);
+
+      if (state.chatOpen) {
+        dom.chatToggle.classList.add('active');
+        // Kullanıcı listesini yenile
+        if (state.isConnected) {
+          send('get-users');
+        }
+      } else {
+        dom.chatToggle.classList.remove('active');
+        state.unreadCount = 0;
+        updateChatBadge();
+      }
+    }
+
+    function closeChat() {
+      state.chatOpen = false;
+      dom.chatModal.classList.remove('active');
+      dom.chatToggle.classList.remove('active');
+      state.unreadCount = 0;
+      updateChatBadge();
+    }
+
+    // Chat tab değiştir
+    function switchChatTab(tabName) {
+      document.querySelectorAll('.chat-tab').forEach(t => t.classList.remove('active'));
+      document.querySelector(`.chat-tab[data-tab="${tabName}"]`).classList.add('active');
+
+      document.querySelectorAll('.chat-content').forEach(c => c.classList.remove('active'));
+      if (tabName === 'messages') {
+        dom.chatMessages.parentElement.classList.add('active');
+      } else {
+        dom.chatUserList.parentElement.classList.add('active');
+        // Kullanıcı listesini yenile
+        if (state.isConnected) {
+          send('get-users');
+        }
+      }
+    }
+
+    // Mesaj gönder
+    function sendChatMessage() {
+      const content = dom.chatInput.value.trim();
+      if (!content) return;
+
+      if (!state.isConnected) {
+        showNotification('error', 'Bağlı Değil', 'Mesaj göndermek için önce bir kanala bağlanın.');
+        return;
+      }
+
+      // Kullanıcı seçili değilse tüm kanala broadcast gönder
+      const isBroadcast = !state.selectedChatUser;
+
+      send('chat-message', {
+        target: state.selectedChatUser || null, // null = broadcast
+        content: content
+      });
+
+      // Broadcast ise gönderene özel bildirim göster
+      if (isBroadcast) {
+        addSystemMessage(`📢 Tüm kanala mesaj gönderildi: ${content}`, 'info');
+      }
+
+      dom.chatInput.value = '';
+    }
+
+    // Mesaj ekle
+    function addChatMessage(msg, isSent = false) {
+      // Boş mesaj kontrolü
+      if (!dom.chatMessages.querySelector('.chat-message')) {
+        dom.chatMessages.innerHTML = '';
+      }
+
+      const messageEl = document.createElement('div');
+      messageEl.className = `chat-message ${isSent ? 'sent' : 'received'}`;
+
+      const time = new Date(msg.timestamp).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+
+      messageEl.innerHTML = `
+        ${!isSent ? `<div class="chat-message-sender">${msg.fromUsername}</div>` : ''}
+        <div class="chat-message-text">${escapeHtml(msg.content)}</div>
+        <div class="chat-message-time">${time}</div>
+      `;
+
+      dom.chatMessages.appendChild(messageEl);
+      dom.chatMessages.scrollTop = dom.chatMessages.scrollHeight;
+
+      // Mesaj geçmişine ekle
+      state.chatMessages.push(msg);
+    }
+
+    // Gelen mesajı işle
+    function handleChatMessage(msg) {
+      const isBroadcast = msg.broadcast === true;
+
+      if (isBroadcast) {
+        // Broadcast mesajı - farklı stil
+        addBroadcastMessage(msg);
+      } else {
+        // Özel mesaj
+        addChatMessage(msg, false);
+      }
+
+      // Chat kapalıysa bildirim göster
+      if (!state.chatOpen) {
+        state.unreadCount++;
+        updateChatBadge();
+        const prefix = isBroadcast ? '📢 Tüm Kanal' : msg.fromUsername;
+        showNotification('info', `Yeni Mesaj: ${prefix}`, msg.content.substring(0, 50) + (msg.content.length > 50 ? '...' : ''));
+      } else {
+        // Sesli bildirim
+        try {
+          const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+          const oscillator = audioContext.createOscillator();
+          const gainNode = audioContext.createGain();
+          oscillator.connect(gainNode);
+          gainNode.connect(audioContext.destination);
+          oscillator.frequency.setValueAtTime(800, audioContext.currentTime);
+          oscillator.type = 'sine';
+          gainNode.gain.setValueAtTime(0.05, audioContext.currentTime);
+          oscillator.start();
+          oscillator.stop(audioContext.currentTime + 0.1);
+        } catch (e) {}
+      }
+    }
+
+    // Broadcast mesajı ekle
+    function addBroadcastMessage(msg) {
+      // Boş mesaj kontrolü
+      if (!dom.chatMessages.querySelector('.chat-message')) {
+        dom.chatMessages.innerHTML = '';
+      }
+
+      const messageEl = document.createElement('div');
+      messageEl.className = 'chat-message broadcast';
+
+      const time = new Date(msg.timestamp).toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+
+      messageEl.innerHTML = `
+        <div class="chat-message-sender">📢 ${msg.fromUsername} <span style="color: var(--warning); font-size: 0.6rem;">(TÜM KANAL)</span></div>
+        <div class="chat-message-text">${escapeHtml(msg.content)}</div>
+        <div class="chat-message-time">${time}</div>
+      `;
+
+      dom.chatMessages.appendChild(messageEl);
+      dom.chatMessages.scrollTop = dom.chatMessages.scrollHeight;
+    }
+
+    // Broadcast uyarısını işle
+    function handleBroadcastAlert(msg) {
+      const isFromMe = msg.from === state.myId;
+
+      if (!isFromMe) {
+        // Sese benzer "pik" sesi
+        playAlertSound('broadcast');
+
+        // Bildirim göster (daha uzun süre)
+        showNotification(
+          'broadcast',
+          `📢 ACİL UYARI: ${msg.fromUsername}`,
+          msg.content,
+          15000
+        );
+
+        // Sistem mesajına da ekle
+        addSystemMessage(`📢 ACİL UYARI from ${msg.fromUsername}: ${msg.content}`, 'error');
+      }
+    }
+
+    // SOS sinyalini işle
+    function handleSOSAlert(msg) {
+      const isFromMe = msg.from === state.myId;
+      const locationText = msg.latitude && msg.longitude
+        ? `Konum: ${msg.latitude.toFixed(4)}, ${msg.longitude.toFixed(4)}`
+        : 'Konum bilgisi yok';
+
+      if (!isFromMe) {
+        // SOS alarm sesi
+        playAlertSound('sos');
+
+        // Bildirim göster (çok uzun süre - kapatmak gerekir)
+        const notification = showNotification(
+          'sos',
+          `🆘 SOS SİNYALİ: ${msg.fromUsername}`,
+          `${msg.message}\n${locationText}`,
+          0 // Kapatılmana kadar açık kal
+        );
+
+        // Sistem mesajına da ekle
+        addSystemMessage(`🆘 SOS from ${msg.fromUsername}: ${msg.message} (${locationText})`, 'error');
+
+        // Kullanıcı listesinde vurgula
+        const userItem = document.querySelector(`[data-user-id="${msg.from}"]`);
+        if (userItem) {
+          userItem.style.animation = 'sos-pulse 1s ease infinite';
+        }
+      }
+    }
+
+    // Kullanıcı listesini render et
+    function renderChatUserList(users, yourId) {
+      dom.chatUserList.innerHTML = '';
+
+      if (users.length === 0) {
+        dom.chatUserList.innerHTML = `
+          <div class="chat-empty">
+            <div class="chat-empty-icon">👤</div>
+            <div class="chat-empty-text">Kullanıcı bulunmuyor</div>
+          </div>
+        `;
+        return;
+      }
+
+      users.forEach(user => {
+        if (user.id === yourId) return; // Kendini gösterme
+
+        const item = document.createElement('div');
+        item.className = 'chat-user-item';
+        item.dataset.userId = user.id;
+
+        const isSelected = state.selectedChatUser === user.id;
+
+        if (isSelected) {
+          item.classList.add('selected');
+        }
+
+        item.innerHTML = `
+          <div class="chat-user-avatar">${user.username.slice(0, 2).toUpperCase()}</div>
+          <span class="chat-user-name">${user.username}</span>
+          <div class="chat-user-status online"></div>
+        `;
+
+        item.addEventListener('click', () => selectChatUser(user.id, user.username));
+
+        dom.chatUserList.appendChild(item);
+      });
+    }
+
+    // Kullanıcı seçimini iptal et - Tüm kanala geç (global)
+    window.clearChatUserSelection = function() {
+      state.selectedChatUser = null;
+
+      // UI güncelle
+      document.querySelectorAll('.chat-user-item').forEach(item => {
+        item.classList.remove('selected');
+      });
+
+      // Input placeholder güncelle
+      dom.chatInput.placeholder = 'Tum kanala mesaj yazin (kullanici secmek icin Kullanicilar sekmesine gecin)...';
+
+      updateChatInputHeader();
+    }
+
+    // Kullanıcı seç
+    function selectChatUser(userId, username) {
+      state.selectedChatUser = userId;
+
+      // UI güncelle
+      document.querySelectorAll('.chat-user-item').forEach(item => {
+        item.classList.toggle('selected', item.dataset.userId === userId);
+      });
+
+      // Mesajlar sekmesine geç
+      switchChatTab('messages');
+
+      // Input placeholder güncelle
+      dom.chatInput.placeholder = `${username} kullanıcısına mesaj yazın...`;
+
+      updateChatInputHeader(username);
+
+      // Boşsa mesaj alanını temizle
+      if (!dom.chatMessages.querySelector('.chat-message')) {
+        dom.chatMessages.innerHTML = `
+          <div class="chat-empty">
+            <div class="chat-empty-icon">💬</div>
+            <div class="chat-empty-text">${username} ile mesajlaşmaya başlayın</div>
+          </div>
+        `;
+      }
+
+      // Focus
+      dom.chatInput.focus();
+    }
+
+    // Chat badge güncelle
+    function updateChatBadge() {
+      if (state.unreadCount > 0) {
+        dom.chatBadge.textContent = state.unreadCount > 9 ? '9+' : state.unreadCount;
+        dom.chatBadge.classList.remove('hidden');
+        dom.chatToggle.classList.add('has-unread');
+      } else {
+        dom.chatBadge.classList.add('hidden');
+        dom.chatToggle.classList.remove('has-unread');
+      }
+    }
+
+    // Chat input header güncelle
+    function updateChatInputHeader(username = null) {
+      let headerEl = dom.chatMessages.parentElement.querySelector('.chat-input-header');
+      if (!headerEl) {
+        headerEl = document.createElement('div');
+        headerEl.className = 'chat-input-header';
+        dom.chatMessages.parentElement.insertBefore(headerEl, dom.chatMessages.parentElement.querySelector('.chat-input-area'));
+      }
+
+      if (username) {
+        headerEl.innerHTML = `
+          <span class="chat-input-header-text">💬 ${username}</span>
+          <button class="chat-input-header-clear" onclick="clearChatUserSelection()">X Tum Kanala Gec</button>
+        `;
+      } else {
+        headerEl.innerHTML = `
+          <span class="chat-input-header-text">📢 TUM KANAL</span>
+          <span class="chat-input-header-hint">Kullanici secmek icin Kullanicilar sekmesine gecin</span>
+        `;
+      }
+    }
+
+    // SOS gönder
+    function sendSOS() {
+      if (!state.isConnected) {
+        showNotification('error', 'Bagli Degil', 'SOS gondermek için önce bir kanala baglanin.');
+        return;
+      }
+
+      if (!confirm('ACIL SOS SINYALI GONDERILECEK!\n\nKonumunuzla birlikte tüm kullanıcilara bildirim gidecek.\n\nEmin misiniz?')) {
+        return;
+      }
+
+      // GPS kapaliysa once aktif et ve konum al
+      if (!state.gpsEnabled) {
+        showNotification('info', 'GPS Aktif Ediliyor', 'Konum aliniyor, lutfen bekleyin...');
+        startGPS();
+
+        // Konum gelmesini bekle (mobil icin max 10 saniye) sonra SOS gonder
+        let waited = 0;
+        const checkInterval = setInterval(() => {
+          waited += 100;
+
+          // Konum geldiyse veya 10 saniye olduysa SOS gonder
+          if ((state.currentLatitude && state.currentLongitude) || waited >= 10000) {
+            clearInterval(checkInterval);
+
+            if (state.currentLatitude && state.currentLongitude) {
+              addSystemMessage('GPS konumu alindi - SOS gonderiliyor', 'success');
+            } else {
+              addSystemMessage('GPS konumu alinamadi - konumsuz SOS gonderiliyor', 'warning');
+            }
+
+            sendSOSNow();
+          }
+        }, 100);
+      } else {
+        // Zaten GPS aktif, direkt SOS gonder
+        sendSOSNow();
+      }
+    }
+
+    // SOS mesajini hemen gonder
+    function sendSOSNow() {
+      send('sos-alert', {
+        message: 'ACIL YARDIM GEREKIYOR!'
+      });
+
+      showNotification('warning', 'SOS Gonderiliyor', 'SOS sinyaliniz iletiliyor...');
+    }
+
+    // HTML escape
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    // ==========================================
+    // WebRTC Peer Connections
+    // ==========================================
+
+    async function createPeerConnection(targetUserId, isInitiator) {
+      const pc = new RTCPeerConnection(CONFIG.rtcConfig);
+      let connectionType = 'unknown';
+
+      pc.onicecandidate = (e) => {
+        if (e.candidate) {
+          if (e.candidate.candidate.includes('typ host')) {
+            connectionType = 'local';
+            updateSignalStrength(5);
+          } else if (e.candidate.candidate.includes('typ srflx')) {
+            connectionType = 'stun';
+            updateSignalStrength(4);
+          } else if (e.candidate.candidate.includes('typ relay')) {
+            connectionType = 'relay';
+            updateSignalStrength(2);
+          }
+          send('ice-candidate', { target: targetUserId, candidate: e.candidate });
+        }
+      };
+
+      pc.onconnectionstatechange = () => {
+        console.log(`Bağlantı durumu (${targetUserId}): ${pc.connectionState}`);
+        if (pc.connectionState === 'connected') {
+          startStatsMonitoring(pc, targetUserId);
+        } else if (pc.connectionState === 'disconnected' || pc.connectionState === 'failed') {
+          updateSignalStrength(0);
+        }
+      };
+
+      pc.ontrack = (e) => {
+        console.log(`Ses alındı: ${targetUserId}`);
+        playAudio(e.streams[0]);
+      };
+
+      if (state.localStream) {
+        state.localStream.getAudioTracks().forEach(track => {
+          pc.addTrack(track, state.localStream);
+        });
+      }
+
+      state.peerConnections.set(targetUserId, pc);
+
+      if (isInitiator) {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        send('offer', { target: targetUserId, sdp: offer });
+      }
+
+      return pc;
+    }
+
+    async function handleOffer(msg) {
+      const pc = state.peerConnections.get(msg.sender) || await createPeerConnection(msg.sender, false);
+      await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      send('answer', { target: msg.sender, sdp: answer });
+    }
+
+    async function handleAnswer(msg) {
+      const pc = state.peerConnections.get(msg.sender);
+      if (pc) {
+        await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+      }
+    }
+
+    function handleIceCandidate(msg) {
+      const pc = state.peerConnections.get(msg.sender);
+      if (pc) {
+        pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+      }
+    }
+
+    function closePeerConnection(userId) {
+      const pc = state.peerConnections.get(userId);
+      if (pc) {
+        pc.close();
+        state.peerConnections.delete(userId);
+      }
+    }
+
+    // ==========================================
+    // Ses İşleme
+    // ==========================================
+
+    async function initAudio() {
+      try {
+        if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+          addSystemMessage('Mikrofon erişimi için HTTPS gerekli', 'error');
+          return false;
+        }
+
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          addSystemMessage('Tarayıcı mikrofonu desteklemiyor', 'error');
+          return false;
+        }
+
+        state.localStream = await navigator.mediaDevices.getUserMedia(CONFIG.audioConstraints);
+
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        state.audioContext = new AudioContextClass();
+
+        if (state.audioContext.state === 'suspended') {
+          await state.audioContext.resume();
+        }
+
+        state.analyser = state.audioContext.createAnalyser();
+        state.analyser.fftSize = 64;
+        state.analyser.smoothingTimeConstant = 0.5;
+
+        state.localStream.getAudioTracks().forEach(track => {
+          track.enabled = false;
+        });
+
+        addSystemMessage('Mikrofon hazır', 'success');
+        return true;
+      } catch (e) {
+        console.error('Ses başlatma hatası:', e);
+        if (e.name === 'NotAllowedError') {
+          addSystemMessage('Mikrofon izni reddedildi', 'error');
+        } else if (e.name === 'NotFoundError') {
+          addSystemMessage('Mikrofon bulunamadı', 'error');
+        } else if (e.name === 'NotReadableError') {
+          addSystemMessage('Mikrofon kullanımda', 'error');
+        } else {
+          addSystemMessage(`Hata: ${e.name}`, 'error');
+        }
+        return false;
+      }
+    }
+
+    function playAudio(stream) {
+      if (state.audioContext && state.audioContext.state === 'suspended') {
+        state.audioContext.resume();
+      }
+
+      const audio = new Audio();
+      audio.srcObject = stream;
+      audio.play().catch(e => console.error('Ses çalma hatası:', e));
+    }
+
+    function startTransmitting() {
+      if (!state.localStream || state.isTransmitting) return;
+
+      state.localStream.getAudioTracks().forEach(track => {
+        track.enabled = true;
+      });
+      state.isTransmitting = true;
+
+      dom.pttButton.classList.add('active');
+      dom.txIndicator.classList.add('active');
+      dom.txText.textContent = 'GÖNDERİYOR';
+
+      send('speaking', { speaking: true });
+    }
+
+    function stopTransmitting() {
+      if (!state.localStream || !state.isTransmitting) return;
+
+      state.localStream.getAudioTracks().forEach(track => {
+        track.enabled = false;
+      });
+      state.isTransmitting = false;
+
+      dom.pttButton.classList.remove('active');
+      dom.txIndicator.classList.remove('active');
+      dom.txText.textContent = 'HAZIR';
+
+      send('speaking', { speaking: false });
+    }
+
+    // ==========================================
+    // Görselleştirici
+    // ==========================================
+
+    function startVisualizer() {
+      const bufferLength = state.analyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+
+      try {
+        state.audioContext.createMediaStreamSource(state.localStream).connect(state.analyser);
+      } catch (e) {
+        // Already connected
+      }
+
+      let lastDraw = 0;
+      const targetFPS = 10;
+      const frameInterval = 1000 / targetFPS;
+
+      function draw(timestamp) {
+        requestAnimationFrame(draw);
+
+        if (timestamp - lastDraw < frameInterval) return;
+        lastDraw = timestamp;
+
+        state.analyser.getByteFrequencyData(dataArray);
+
+        const width = dom.visualizerCanvas.width = dom.visualizerCanvas.offsetWidth;
+        const height = dom.visualizerCanvas.height = dom.visualizerCanvas.offsetHeight;
+
+        dom.visualizerCtx.clearRect(0, 0, width, height);
+
+        if (state.isTransmitting) {
+          const barWidth = width / bufferLength;
+
+          for (let i = 0; i < bufferLength; i++) {
+            const barHeight = (dataArray[i] / 255) * height * 0.8;
+            dom.visualizerCtx.fillStyle = '#ff6b00';
+            dom.visualizerCtx.fillRect(i * barWidth, height - barHeight, barWidth - 1, barHeight);
+          }
+        }
+      }
+
+      requestAnimationFrame(draw);
+    }
+
+    function startStatsMonitoring(pc, userId) {
+      if (state.statsInterval) clearInterval(state.statsInterval);
+
+      state.statsInterval = setInterval(async () => {
+        try {
+          const stats = await pc.getStats();
+          let rtt = 0;
+
+          stats.forEach(report => {
+            if (report.type === 'remote-inbound-rtp' && report.mediaType === 'audio') {
+              rtt = report.roundTripTime || 0;
+            }
+          });
+
+          if (rtt > 0) {
+            if (rtt < 10) updateSignalStrength(5);
+            else if (rtt < 50) updateSignalStrength(4);
+            else if (rtt < 100) updateSignalStrength(3);
+            else if (rtt < 200) updateSignalStrength(2);
+            else updateSignalStrength(1);
+          }
+
+          dom.latencyDisplay.textContent = rtt > 0 ? `${Math.round(rtt * 1000)}ms` : '--';
+        } catch (e) {
+          // Stats not available yet
+        }
+      }, 1000);
+    }
+
+    function updateChannelDisplay(room) {
+      dom.currentChannel.textContent = room.toUpperCase();
+      const freq = (room.split('').reduce((a, c) => a + c.charCodeAt(0), 0) % 100 + 400) / 10;
+      dom.currentFreq.textContent = `${freq.toFixed(1)} MHz`;
+    }
+
+    // ==========================================
+    // Kullanıcı Yönetimi
+    // ==========================================
+
+    function addUser(user) {
+      if (state.peers.has(user.id)) return;
+      state.peers.set(user.id, user);
+      renderUsers();
+    }
+
+    function removeUser(userId) {
+      state.peers.delete(userId);
+      // Konum verisini de temizle
+      state.userLocations.delete(userId);
+      removeMapMarker(userId);
+      updateLocationList();
+      renderUsers();
+    }
+
+    function setUserSpeaking(userId, speaking) {
+      const userEl = document.querySelector(`[data-user-id="${userId}"]`);
+      if (userEl) {
+        userEl.classList.toggle('speaking', speaking);
+      }
+    }
+
+    function renderUsers() {
+      if (state.peers.size === 0) {
+        dom.usersList.innerHTML = '<div class="system-msg" style="text-align: center; padding: 1rem;">Menzilde birim yok</div>';
+        return;
+      }
+
+      dom.usersList.innerHTML = '';
+      for (const [id, user] of state.peers) {
+        // Mesafeyi hesapla
+        let distanceText = '';
+        const userLocation = state.userLocations.get(id);
+        if (userLocation && state.currentLatitude && state.currentLongitude) {
+          const distance = calculateDistance(
+            state.currentLatitude, state.currentLongitude,
+            userLocation.latitude, userLocation.longitude
+          );
+          if (distance !== null) {
+            distanceText = `<span class="user-distance">${formatDistance(distance)}</span>`;
+          }
+        }
+
+        const div = document.createElement('div');
+        div.className = 'user-item';
+        div.dataset.userId = id;
+        div.innerHTML = `
+          <div class="user-avatar">${user.username.slice(0, 2).toUpperCase()}</div>
+          <div class="user-info">
+            <span class="user-name">${user.username}</span>
+            ${distanceText}
+          </div>
+          <span class="user-speaker"></span>
+        `;
+        dom.usersList.appendChild(div);
+      }
+    }
+
+    function showConnectedPanel() {
+      dom.joinPanel.classList.add('hidden');
+      dom.connectedPanel.classList.remove('hidden');
+      dom.pttButton.disabled = false;
+      dom.yourCallsign.textContent = state.myUsername;
+    }
+
+    function showJoinPanel() {
+      dom.joinPanel.classList.remove('hidden');
+      dom.connectedPanel.classList.add('hidden');
+      dom.pttButton.disabled = true;
+      dom.currentChannel.textContent = '--';
+      dom.currentFreq.textContent = '---.- MHz';
+    }
+
+    function disconnect() {
+      state.isConnected = false;
+      state.peers.clear();
+      state.peerConnections.forEach(pc => pc.close());
+      state.peerConnections.clear();
+      if (state.statsInterval) {
+        clearInterval(state.statsInterval);
+        state.statsInterval = null;
+      }
+      showJoinPanel();
+      renderUsers();
+    }
+
+    async function joinChannel(password = null) {
+      if (!state.selectedChannel) {
+        addSystemMessage('Önce bir kanal seçin', 'error');
+        return;
+      }
+
+      state.myUsername = dom.usernameInput.value.trim() || `Birim-${Math.floor(Math.random() * 9000) + 1000}`;
+
+      if (!await initAudio()) return;
+
+      const joinData = {
+        room: state.selectedChannel,
+        username: state.myUsername,
+        deviceId: getDeviceId()
+      };
+
+      if (password) {
+        joinData.password = password;
+      }
+
+      if (state.adminToken && state.isAdmin) {
+        joinData.adminToken = state.adminToken;
+      }
+
+      state.pendingJoin = joinData;
+      setStatus('connecting', 'BAĞLANIYOR...');
+      connectWebSocket();
+
+      dom.passwordModal.classList.add('hidden');
+    }
+
+    // ==========================================
+    // Yönetici Paneli
+    // ==========================================
+
+    function openAdminModal() {
+      dom.adminModal.classList.remove('hidden');
+      if (state.isAdmin) {
+        dom.adminLoginSection.classList.add('hidden');
+        dom.adminControls.classList.remove('hidden');
+        loadAdminData();
+      } else {
+        dom.adminLoginSection.classList.remove('hidden');
+        dom.adminControls.classList.add('hidden');
+      }
+    }
+
+    function closeAdminModal() {
+      dom.adminModal.classList.add('hidden');
+    }
+
+    async function adminLogin() {
+      const token = dom.adminTokenInput.value.trim();
+      if (!token) {
+        addSystemMessage('Yönetici anahtarı girin', 'error');
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/auth/admin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token })
+        });
+
+        const result = await response.json();
+        if (result.valid) {
+          state.adminToken = token;
+          state.isAdmin = true;
+          dom.adminLoginSection.classList.add('hidden');
+          dom.adminControls.classList.remove('hidden');
+          dom.adminToggle.classList.add('active');
+          loadAdminData();
+          addSystemMessage('Yönetici erişimi verildi', 'success');
+        } else {
+          addSystemMessage('Geçersiz yönetici anahtarı', 'error');
+        }
+      } catch (e) {
+        send('admin-auth', { token });
+      }
+    }
+
+    async function loadAdminData() {
+      try {
+        const channels = await fetch('/api/channels').then(r => r.json());
+        renderAdminChannels(channels);
+      } catch (e) {
+        console.error('Kanallar yüklenemedi:', e);
+      }
+
+      try {
+        const headers = state.adminToken ? { 'X-Admin-Token': state.adminToken } : {};
+        const data = await fetch('/api/users', { headers }).then(r => r.json());
+        renderAdminUsers(data.online);
+        renderBanList(data.banned);
+      } catch (e) {
+        console.error('Kullanıcılar yüklenemedi:', e);
+      }
+
+      try {
+        const stats = await fetch('/api/stats').then(r => r.json());
+        document.getElementById('stat-rooms').textContent = stats.totalRooms;
+        document.getElementById('stat-users').textContent = stats.totalClients;
+      } catch (e) {
+        console.error('İstatistikler yüklenemedi:', e);
+      }
+    }
+
+    function renderAdminChannels(channels) {
+      dom.adminChannelList.innerHTML = '';
+      channels.forEach(ch => {
+        const div = document.createElement('div');
+        div.className = 'admin-channel-item';
+        div.innerHTML = `
+          <span class="admin-channel-name ${ch.password ? 'locked' : ''}">${ch.name}${ch.password ? ' 🔒' : ''}</span>
+          <div class="admin-channel-actions">
+            <button class="btn btn-small" data-action="password" data-channel="${ch.name}">${ch.password ? 'Şifreyi Kaldır' : 'Şifre Belirle'}</button>
+            <button class="btn btn-small btn-danger" data-action="delete" data-channel="${ch.name}">Sil</button>
+          </div>
+        `;
+        dom.adminChannelList.appendChild(div);
+      });
+
+      dom.adminChannelList.querySelectorAll('button').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          const action = e.target.dataset.action;
+          const channel = e.target.dataset.channel;
+
+          if (action === 'delete') {
+            await deleteChannel(channel);
+          } else if (action === 'password') {
+            await setChannelPassword(channel);
+          }
+        });
+      });
+    }
+
+    function renderAdminUsers(users) {
+      dom.adminUsersList.innerHTML = '';
+      if (users.length === 0) {
+        dom.adminUsersList.innerHTML = '<div class="system-msg" style="text-align: center; padding: 0.5rem;">Çevrimiçi kullanıcı yok</div>';
+        return;
+      }
+
+      users.forEach(user => {
+        const isMe = user.username.toLowerCase() === state.myUsername?.toLowerCase();
+        const div = document.createElement('div');
+        div.className = 'user-item';
+        div.innerHTML = `
+          <div class="user-avatar">${user.username.slice(0, 2).toUpperCase()}</div>
+          <span class="user-name">${user.username}${isMe ? ' (Siz)' : ''}</span>
+          <span style="font-size: 0.55rem; color: var(--text-dim);">${user.room}</span>
+          ${!isMe ? `<button class="btn btn-small btn-danger" style="margin-left: auto;" data-ban-device="${user.deviceId}">Yasakla</button>` : '<span style="margin-left: auto; font-size: 0.55rem; color: var(--text-dim);">Kendini yasaklayamazsın</span>'}
+        `;
+        dom.adminUsersList.appendChild(div);
+      });
+
+      dom.adminUsersList.querySelectorAll('[data-ban-device]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const deviceId = btn.dataset.banDevice;
+          banByDeviceId(deviceId);
+        });
+      });
+    }
+
+    function renderBanList(bannedItems) {
+      dom.banList.innerHTML = '';
+      if (bannedItems.length === 0) {
+        dom.banList.innerHTML = '<div class="system-msg" style="text-align: center; padding: 0.5rem;">Yasaklı cihaz yok</div>';
+        return;
+      }
+
+      bannedItems.forEach(item => {
+        const div = document.createElement('div');
+        div.className = 'ban-item';
+        div.innerHTML = `
+          <span class="ban-ip">${item}</span>
+          <button class="btn btn-small" data-unban-item="${item}">Yasağı Kaldır</button>
+        `;
+        dom.banList.appendChild(div);
+      });
+
+      dom.banList.querySelectorAll('[data-unban-item]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const item = btn.dataset.unbanItem;
+          unbanByItem(item);
+        });
+      });
+    }
+
+    async function createChannel() {
+      const name = dom.newChannelName.value.trim().toUpperCase();
+      const password = dom.newChannelPassword.value.trim();
+
+      if (!name) {
+        addSystemMessage('Kanal adı girin', 'error');
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/channels', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Admin-Token': state.adminToken
+          },
+          body: JSON.stringify({ name, password: password || null })
+        });
+
+        const result = await response.json();
+        if (result.success) {
+          dom.newChannelName.value = '';
+          dom.newChannelPassword.value = '';
+          await loadChannelsFromServer();
+          initializeChannels();
+          renderAdminChannels(await (await fetch('/api/channels')).json());
+          addSystemMessage(`Kanal oluşturuldu: ${name}`, 'success');
+        } else {
+          addSystemMessage('Kanal oluşturulamadı', 'error');
+        }
+      } catch (e) {
+        send('admin-create-channel', { name, password: password || null });
+      }
+    }
+
+    async function deleteChannel(name) {
+      try {
+        const response = await fetch(`/api/channels/${encodeURIComponent(name)}`, {
+          method: 'DELETE',
+          headers: { 'X-Admin-Token': state.adminToken }
+        });
+
+        if (response.ok) {
+          await loadChannelsFromServer();
+          initializeChannels();
+          renderAdminChannels(await (await fetch('/api/channels')).json());
+          addSystemMessage(`Kanal silindi: ${name}`, 'success');
+        }
+      } catch (e) {
+        send('admin-delete-channel', { name });
+      }
+    }
+
+    async function setChannelPassword(name) {
+      const password = prompt(`${name} için yeni şifre (kaldırmak için boş bırakın):`);
+      if (password === null) return;
+
+      try {
+        const response = await fetch('/api/channels/password', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Admin-Token': state.adminToken
+          },
+          body: JSON.stringify({ name, password: password || null })
+        });
+
+        if (response.ok) {
+          await loadChannelsFromServer();
+          initializeChannels();
+          renderAdminChannels(await (await fetch('/api/channels')).json());
+          addSystemMessage(`Kanal şifresi güncellendi: ${name}`, 'success');
+        }
+      } catch (e) {
+        send('admin-set-password', { name, password: password || null });
+      }
+    }
+
+    async function banByDeviceId(deviceId) {
+      if (!confirm(`Cihazı yasakla: ${deviceId}?`)) return;
+
+      try {
+        await fetch('/api/users/ban', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Admin-Token': state.adminToken
+          },
+          body: JSON.stringify({ deviceId })
+        });
+        loadAdminData();
+        addSystemMessage(`Cihaz yasaklandı: ${deviceId}`, 'success');
+      } catch (e) {
+        console.error('Yasaklama hatası:', e);
+      }
+    }
+
+    async function unbanByItem(item) {
+      try {
+        await fetch(`/api/users/ban/${encodeURIComponent(item)}`, {
+          method: 'DELETE',
+          headers: { 'X-Admin-Token': state.adminToken }
+        });
+        loadAdminData();
+        addSystemMessage(`Yasağı kaldırıldı: ${item}`, 'success');
+      } catch (e) {
+        console.error('Yasak kaldırma hatası:', e);
+      }
+    }
+
+    // ==========================================
+    // Event Listeners
+    // ==========================================
+
+    // Double-click to join
+    document.getElementById('channel-buttons').addEventListener('dblclick', () => {
+      if (state.selectedChannel) {
+        tryJoinChannel();
+      }
+    });
+
+    // Enter key to join
+    dom.usernameInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter' && state.selectedChannel) {
+        tryJoinChannel();
+      }
+    });
+
+    // Leave button
+    dom.leaveBtn.addEventListener('click', () => {
+      send('leave');
+      disconnect();
+      if (state.ws) state.ws.close();
+    });
+
+    // PTT button - Desktop mouse events
+    dom.pttButton.addEventListener('mousedown', (e) => {
+      if (!state.isConnected) {
+        addSystemMessage('Önce bir kanala bağlanın', 'error');
+        return;
+      }
+      e.preventDefault();
+      startTransmitting();
+    });
+
+    dom.pttButton.addEventListener('mouseup', (e) => {
+      e.preventDefault();
+      stopTransmitting();
+    });
+
+    dom.pttButton.addEventListener('mouseleave', (e) => {
+      if (state.isTransmitting) {
+        stopTransmitting();
+      }
+    });
+
+    // Touch events for mobile PTT
+    dom.pttButton.addEventListener('touchstart', (e) => {
+      if (!state.isConnected) {
+        addSystemMessage('Önce bir kanala bağlanın', 'error');
+        return;
+      }
+      e.preventDefault();
+      startTransmitting();
+    }, { passive: false });
+
+    dom.pttButton.addEventListener('touchend', (e) => {
+      e.preventDefault();
+      stopTransmitting();
+    }, { passive: false });
+
+    dom.pttButton.addEventListener('touchcancel', (e) => {
+      e.preventDefault();
+      stopTransmitting();
+    }, { passive: false });
+
+    // Spacebar - Chat input focusluysa normal boşluk, değilse PTT
+    document.addEventListener('keydown', (e) => {
+      if (e.code === 'Space' && !e.repeat) {
+        // Chat input'a focusluyken normal boşluk bırak
+        if (document.activeElement === dom.chatInput) {
+          return; // Normal davranış
+        }
+
+        if (state.isConnected) {
+          // PTT için
+          e.preventDefault();
+          startTransmitting();
+        }
+      }
+    });
+
+    document.addEventListener('keyup', (e) => {
+      if (e.code === 'Space') {
+        // Chat input focuslu değilse PTT'yi bırak
+        if (document.activeElement !== dom.chatInput && state.isConnected) {
+          e.preventDefault();
+          stopTransmitting();
+        }
+      }
+    });
+
+    // Enter tuşu - Chat input'ta mesaj gönder
+    dom.chatInput.addEventListener('keydown', (e) => {
+      if (e.code === 'Enter') {
+        e.preventDefault();
+        sendChatMessage();
+      }
+    });
+
+    // Update latency display (simulated when not connected)
+    setInterval(() => {
+      if (state.isConnected) {
+        // Real latency comes from WebRTC stats
+      } else {
+        dom.latencyDisplay.textContent = '--';
+      }
+    }, 1000);
+
+    // Admin modal events
+    dom.adminToggle.addEventListener('click', openAdminModal);
+    dom.adminModalClose.addEventListener('click', closeAdminModal);
+    dom.adminModalFooterClose.addEventListener('click', closeAdminModal);
+    dom.adminLoginBtn.addEventListener('click', adminLogin);
+    dom.adminTokenInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') adminLogin();
+    });
+    dom.createChannelBtn.addEventListener('click', createChannel);
+
+    // Close modals on overlay click
+    dom.adminModal.addEventListener('click', (e) => {
+      if (e.target === dom.adminModal) closeAdminModal();
+    });
+
+    // Password modal events
+    dom.passwordModalClose.addEventListener('click', () => {
+      dom.passwordModal.classList.add('hidden');
+    });
+
+    dom.passwordCancelBtn.addEventListener('click', () => {
+      dom.passwordModal.classList.add('hidden');
+    });
+
+    dom.passwordSubmitBtn.addEventListener('click', () => {
+      const password = dom.passwordInput.value;
+      if (password) {
+        joinChannel(password);
+      }
+    });
+
+    dom.passwordInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        const password = dom.passwordInput.value;
+        if (password) {
+          joinChannel(password);
+        }
+      }
+    });
+
+    dom.passwordModal.addEventListener('click', (e) => {
+      if (e.target === dom.passwordModal) {
+        dom.passwordModal.classList.add('hidden');
+      }
+    });
+
+    // Welcome Modal
+    async function loadAdminToken() {
+      try {
+        const response = await fetch('/api/admin-token');
+        const data = await response.json();
+
+        if (data.show) {
+          // Token var, göster
+          dom.displayAdminToken.textContent = data.token || 'Mevcut değil';
+        } else {
+          // Token zaten alındı, modal'ı tamamen gizle
+          dom.welcomeModal.classList.add('hidden');
+        }
+      } catch (e) {
+        // Hata durumunda modal'ı gizle
+        dom.welcomeModal.classList.add('hidden');
+      }
+    }
+
+    dom.welcomeModalClose.addEventListener('click', () => {
+      dom.welcomeModal.classList.add('hidden');
+    });
+
+    dom.welcomeModal.addEventListener('click', (e) => {
+      if (e.target === dom.welcomeModal) {
+        dom.welcomeModal.classList.add('hidden');
+      }
+    });
+
+    // ==========================================
+    // SOS & Chat Event Listeners
+    // ==========================================
+
+    // SOS Butonu
+    dom.sosButton.addEventListener('click', sendSOS);
+
+    // Chat Toggle
+    dom.chatToggle.addEventListener('click', toggleChat);
+
+    // Chat Modal Close
+    dom.chatModalClose.addEventListener('click', closeChat);
+
+    // Chat Tabs
+    document.querySelectorAll('.chat-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        switchChatTab(tab.dataset.tab);
+      });
+    });
+
+    // Chat Send
+    dom.chatSendBtn.addEventListener('click', sendChatMessage);
+
+    // ==========================================
+    // Başlatma
+    // ==========================================
+    (async function init() {
+      await loadChannelsFromServer();
+      initializeChannels();
+      initGPS();
+      updateChatInputHeader(); // Varsayılan: Tüm kanal modu
+      addSystemMessage('Sistem hazır. Başlamak için bir kanal seçin.', 'info');
+      await loadAdminToken();
+
+      console.log('=== Init tamamlandı, harita başlatılacak ===');
+
+      // Harita status güncelle
+      if (dom.mapStatus) {
+        dom.mapStatus.textContent = 'Harita başlatılıyor...';
+      }
+
+      // Leaflet kütüphanesinin yüklenmesini bekle ve haritayı başlat
+      const initMapWhenReady = (attempt = 0) => {
+        console.log(`initMapWhenReady çağrıldı (deneme ${attempt}), typeof L:`, typeof L);
+        if (typeof L !== 'undefined') {
+          console.log('Leaflet yüklendi, harita başlatılıyor...');
+          initMap();
+          // Harita boyutunu güncelle
+          setTimeout(() => {
+            if (state.map) {
+              state.map.invalidateSize();
+              console.log('Harita boyutu güncellendi');
+            }
+          }, 500);
+        } else if (attempt < 50) { // 5 saniye kadar dene (50 * 100ms)
+          console.log('Leaflet henüz yüklenmedi, yeniden deneniyor...');
+          setTimeout(() => initMapWhenReady(attempt + 1), 100);
+        } else {
+          console.error('Leaflet yüklenemedi! CDN bağlantısını kontrol edin.');
+          if (dom.mapStatus) {
+            dom.mapStatus.textContent = 'Harita kütüphanesi yüklenemedi!';
+            dom.mapStatus.style.color = 'var(--danger)';
+          }
+        }
+      };
+
+      // Window load event'inden sonra başlat
+      if (document.readyState === 'complete') {
+        // Sayfa zaten yüklenmişse hemen dene
+        initMapWhenReady();
+      } else {
+        // Sayfa yüklenmesini bekle
+        window.addEventListener('load', () => initMapWhenReady());
+      }
+    })();
+  </script>
+</body>
+</html>
