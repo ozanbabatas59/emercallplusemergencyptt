@@ -2000,6 +2000,211 @@
       color: var(--warning);
     }
 
+    /* Settings Modal */
+    .settings-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 3000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(0, 0, 0, 0.8);
+      backdrop-filter: blur(4px);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease;
+    }
+
+    .settings-modal.active {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .settings-modal-content {
+      background: var(--bg-panel);
+      border: 1px solid var(--border-dark);
+      border-radius: 8px;
+      padding: 1.5rem;
+      max-width: 500px;
+      width: 90%;
+      max-height: 80vh;
+      overflow-y: auto;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+    }
+
+    .settings-modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 1.5rem;
+      padding-bottom: 0.75rem;
+      border-bottom: 1px solid var(--border-dark);
+    }
+
+    .settings-modal-title {
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 1rem;
+      color: var(--primary);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+
+    .settings-modal-close {
+      background: transparent;
+      border: 1px solid var(--border-dark);
+      color: var(--text-dim);
+      width: 30px;
+      height: 30px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 1rem;
+      transition: all 0.2s ease;
+    }
+
+    .settings-modal-close:hover {
+      border-color: var(--primary);
+      color: var(--primary);
+    }
+
+    .settings-section {
+      margin-bottom: 1.25rem;
+    }
+
+    .settings-section-title {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-dim);
+      margin-bottom: 0.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
+
+    .settings-section-title::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: var(--border-accent);
+    }
+
+    .settings-select {
+      width: 100%;
+      background: var(--bg-darker);
+      border: 1px solid var(--border-dark);
+      padding: 0.6rem 0.8rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.75rem;
+      color: var(--text-bright);
+      outline: none;
+      transition: border-color 0.2s ease;
+      border-radius: 4px;
+      -webkit-appearance: none;
+      -moz-appearance: none;
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23666' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 12px center;
+      cursor: pointer;
+    }
+
+    .settings-select:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 2px var(--primary-glow);
+    }
+
+    .settings-select option {
+      background: var(--bg-darker);
+      color: var(--text-bright);
+      padding: 4px;
+    }
+
+    .device-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      padding: 0.2rem 0.5rem;
+      border-radius: 3px;
+      font-size: 0.6rem;
+      margin-left: 0.5rem;
+      text-transform: uppercase;
+    }
+
+    .device-badge.bluetooth {
+      background: rgba(0, 114, 255, 0.15);
+      color: #0072ff;
+      border: 1px solid rgba(0, 114, 255, 0.3);
+    }
+
+    .device-badge.wired {
+      background: rgba(128, 128, 128, 0.15);
+      color: #999;
+      border: 1px solid rgba(128, 128, 128, 0.3);
+    }
+
+    .device-badge.usb {
+      background: rgba(0, 255, 136, 0.15);
+      color: #00ff88;
+      border: 1px solid rgba(0, 255, 136, 0.3);
+    }
+
+    .device-badge.builtin {
+      background: rgba(255, 107, 0, 0.15);
+      color: var(--primary);
+      border: 1px solid rgba(255, 107, 0, 0.3);
+    }
+
+    .settings-hint {
+      font-size: 0.6rem;
+      color: var(--text-dim);
+      margin-top: 0.3rem;
+      font-style: italic;
+    }
+
+    .settings-test-btn {
+      background: var(--bg-darker);
+      border: 1px solid var(--border-dark);
+      color: var(--text-bright);
+      padding: 0.4rem 0.7rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.65rem;
+      cursor: pointer;
+      border-radius: 3px;
+      transition: all 0.2s ease;
+      margin-top: 0.5rem;
+    }
+
+    .settings-test-btn:hover {
+      border-color: var(--primary);
+      color: var(--primary);
+    }
+
+    .settings-status {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 0.75rem;
+      background: var(--bg-darker);
+      border: 1px solid var(--border-dark);
+      border-radius: 4px;
+      font-size: 0.65rem;
+      margin-top: 0.5rem;
+    }
+
+    .settings-status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--status-inactive);
+    }
+
+    .settings-status-dot.active {
+      background: var(--status-active);
+      box-shadow: 0 0 8px var(--status-active);
+    }
+
     /* Empty State */
     .chat-empty {
       display: flex;
@@ -2133,6 +2338,7 @@
           <span>GECİKME:</span>
           <span id="latency">--</span>
         </div>
+        <button class="admin-btn" id="settings-btn" title="Ses Ayarları">🎙 SES</button>
         <button class="admin-btn" id="admin-toggle">YÖNETİCİ</button>
       </div>
     </header>
@@ -2392,6 +2598,44 @@
     </div>
   </div>
 
+  <!-- Settings Modal -->
+  <div id="settings-modal" class="modal-overlay hidden">
+    <div class="settings-modal-content">
+      <div class="settings-modal-header">
+        <span class="settings-modal-title">🎙 SES AYARLARI</span>
+        <button class="settings-modal-close" id="settings-modal-close">×</button>
+      </div>
+
+      <!-- Mikrofon -->
+      <div class="settings-section">
+        <div class="settings-section-title">🎤 Mikrofon Girişi</div>
+        <select id="input-device-select" class="settings-select">
+          <option value="">Mikrofon seçiniz...</option>
+        </select>
+        <div class="settings-status" id="input-status">
+          <span class="settings-status-dot" id="input-status-dot"></span>
+          <span id="input-status-text">Mikrofon seçilmedi</span>
+        </div>
+        <div class="settings-hint">Bluetooth, USB veya dahili mikrofon seçebilirsiniz</div>
+        <button class="settings-test-btn" id="test-mic-btn">🎤 Mikrofon Testi</button>
+      </div>
+
+      <!-- Hoparlör -->
+      <div class="settings-section">
+        <div class="settings-section-title">🔊 Hoparlör Çıkışı</div>
+        <select id="output-device-select" class="settings-select">
+          <option value="">Varsayılan</option>
+        </select>
+        <div class="settings-status" id="output-status">
+          <span class="settings-status-dot" id="output-status-dot"></span>
+          <span id="output-status-text">Varsayılan hoparlör</span>
+        </div>
+        <div class="settings-hint">Bluetooth kulaklık, USB hoparlör veya dahili hoparlör</div>
+        <button class="settings-test-btn" id="test-speaker-btn">🔊 Ses Testi</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Password Prompt Modal -->
   <div id="password-modal" class="modal-overlay hidden">
     <div class="modal" style="max-width: 400px;">
@@ -2482,7 +2726,12 @@
       chatOpen: false,
       chatMessages: [],
       selectedChatUser: null,
-      unreadCount: 0
+      unreadCount: 0,
+      // Audio Devices
+      selectedInputDevice: null,
+      selectedOutputDevice: null,
+      availableInputDevices: [],
+      availableOutputDevices: []
     };
 
     // DOM Elements Cache
@@ -2531,6 +2780,17 @@
       displayAdminToken: document.getElementById('display-admin-token'),
       signalBars: document.querySelectorAll('#signal-bars .signal-bar'),
       signalText: document.getElementById('signal-text'),
+      settingsBtn: document.getElementById('settings-btn'),
+      settingsModal: document.getElementById('settings-modal'),
+      settingsModalClose: document.getElementById('settings-modal-close'),
+      inputDeviceSelect: document.getElementById('input-device-select'),
+      outputDeviceSelect: document.getElementById('output-device-select'),
+      inputStatusDot: document.getElementById('input-status-dot'),
+      inputStatusText: document.getElementById('input-status-text'),
+      outputStatusDot: document.getElementById('output-status-dot'),
+      outputStatusText: document.getElementById('output-status-text'),
+      testMicBtn: document.getElementById('test-mic-btn'),
+      testSpeakerBtn: document.getElementById('test-speaker-btn'),
       // SOS & Chat Elements
       sosButton: document.getElementById('sos-button'),
       chatToggle: document.getElementById('chat-toggle'),
@@ -3959,6 +4219,165 @@
     // Ses İşleme
     // ==========================================
 
+    // Cihaz tipini belirle
+    function detectDeviceType(deviceId, label, kind) {
+      const labelLower = label.toLowerCase();
+      if (labelLower.includes('bluetooth') || labelLower.includes('bt-') || labelLower.includes('handsfree') || labelLower.includes('a2dp')) {
+        return 'bluetooth';
+      } else if (labelLower.includes('usb')) {
+        return 'usb';
+      } else if (labelLower.includes('wired') || labelLower.includes('headphone') || labelLower.includes('jack')) {
+        return 'wired';
+      } else {
+        return 'builtin';
+      }
+    }
+
+    function getDeviceBadgeHTML(deviceType) {
+      const badges = {
+        bluetooth: '<span class="device-badge bluetooth">Bluetooth</span>',
+        usb: '<span class="device-badge usb">USB</span>',
+        wired: '<span class="device-badge wired">Kablolu</span>',
+        builtin: '<span class="device-badge builtin">Dahili</span>'
+      };
+      return badges[deviceType] || '';
+    }
+
+    // Mevcut ses cihazlarını listele
+    async function enumerateAudioDevices() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+        console.warn('enumerateDevices desteklenmiyor');
+        return;
+      }
+
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+
+        state.availableInputDevices = devices.filter(d => d.kind === 'audioinput');
+        state.availableOutputDevices = devices.filter(d => d.kind === 'audiooutput');
+
+        // Eğer deviceId'leri boşsa, önce mikrofon izni iste
+        if (state.availableInputDevices.length === 0 || !state.availableInputDevices[0].deviceId) {
+          console.log('Cihaz IDleri boş, izin isteniyorum...');
+          try {
+            await navigator.mediaDevices.getUserMedia({ audio: true });
+            const newDevices = await navigator.mediaDevices.enumerateDevices();
+            state.availableInputDevices = newDevices.filter(d => d.kind === 'audioinput');
+            state.availableOutputDevices = newDevices.filter(d => d.kind === 'audiooutput');
+          } catch (err) {
+            console.error('Mikrofon izni alınamadı:', err);
+          }
+        }
+
+        populateDeviceSelects();
+        updateDeviceStatus();
+        console.log(`🎤 ${state.availableInputDevices.length} giriş, 🔊 ${state.availableOutputDevices.length} çıkış cihazı bulundu`);
+      } catch (e) {
+        console.error('Cihaz listeleme hatası:', e);
+      }
+    }
+
+    // Cihaz seçimlerini doldur
+    function populateDeviceSelects() {
+      // Giriş cihazları
+      dom.inputDeviceSelect.innerHTML = '<option value="">Mikrofon seçiniz...</option>';
+      state.availableInputDevices.forEach((device, index) => {
+        const deviceType = detectDeviceType(device.deviceId, device.label, 'audioinput');
+        const displayName = device.label || `Mikrofon ${index + 1}`;
+        const option = document.createElement('option');
+        option.value = device.deviceId;
+        option.innerHTML = `${getDeviceBadgeHTML(deviceType)} ${displayName}`;
+        if (state.selectedInputDevice === device.deviceId) {
+          option.selected = true;
+        }
+        dom.inputDeviceSelect.appendChild(option);
+      });
+
+      // Çıkış cihazları
+      dom.outputDeviceSelect.innerHTML = '<option value="">Varsayılan</option>';
+      state.availableOutputDevices.forEach((device, index) => {
+        const deviceType = detectDeviceType(device.deviceId, device.label, 'audiooutput');
+        const displayName = device.label || `Hoparlör ${index + 1}`;
+        const option = document.createElement('option');
+        option.value = device.deviceId;
+        option.innerHTML = `${getDeviceBadgeHTML(deviceType)} ${displayName}`;
+        if (state.selectedOutputDevice === device.deviceId) {
+          option.selected = true;
+        }
+        dom.outputDeviceSelect.appendChild(option);
+      });
+
+      // Kayıtlı tercih varsa seç
+      if (state.selectedInputDevice) {
+        const savedOption = dom.inputDeviceSelect.querySelector(`option[value="${state.selectedInputDevice}"]`);
+        if (savedOption) savedOption.selected = true;
+      }
+      if (state.selectedOutputDevice) {
+        const savedOption = dom.outputDeviceSelect.querySelector(`option[value="${state.selectedOutputDevice}"]`);
+        if (savedOption) savedOption.selected = true;
+      }
+    }
+
+    // Cihaz durumunu güncelle
+    function updateDeviceStatus() {
+      // Giriş durumu
+      if (state.selectedInputDevice) {
+        const device = state.availableInputDevices.find(d => d.deviceId === state.selectedInputDevice);
+        const deviceType = device ? detectDeviceType(device.deviceId, device.label, 'audioinput') : 'builtin';
+        const badge = getDeviceBadgeHTML(deviceType);
+        dom.inputStatusDot.classList.add('active');
+        dom.inputStatusText.innerHTML = `Aktif: ${device?.label || 'Seçili'} ${badge}`;
+      } else {
+        dom.inputStatusDot.classList.remove('active');
+        dom.inputStatusText.textContent = 'Mikrofon seçilmedi';
+      }
+
+      // Çıkış durumu
+      if (state.selectedOutputDevice) {
+        const device = state.availableOutputDevices.find(d => d.deviceId === state.selectedOutputDevice);
+        const deviceType = device ? detectDeviceType(device.deviceId, device.label, 'audiooutput') : 'builtin';
+        const badge = getDeviceBadgeHTML(deviceType);
+        dom.outputStatusDot.classList.add('active');
+        dom.outputStatusText.innerHTML = `Aktif: ${device?.label || 'Seçili'} ${badge}`;
+      } else {
+        dom.outputStatusDot.classList.remove('active');
+        dom.outputStatusText.textContent = 'Varsayılan hoparlör';
+      }
+    }
+
+    // Seçili giriş cihazıyla mikrofon başlat
+    function getAudioConstraints() {
+      const constraints = { ...CONFIG.audioConstraints.audio };
+
+      if (state.selectedInputDevice) {
+        constraints.deviceId = { exact: state.selectedInputDevice };
+      }
+
+      return constraints;
+    }
+
+    // Çıkış cihazını değiştir (HTML audio elementi için sink ID)
+    async function applyOutputDevice(deviceId) {
+      // Modern tarayıcılarda WebRTC stream'ine setSinkId ile uygulanabilir
+      if (!deviceId) {
+        state.selectedOutputDevice = null;
+        updateDeviceStatus();
+        return;
+      }
+
+      if (!document.createElement('audio').setSinkId) {
+        addSystemMessage('Tarayıcınız çıkış cihazı değiştirmeyi desteklemiyor - varsayılan kullanılacak', 'info');
+        state.selectedOutputDevice = deviceId;
+        updateDeviceStatus();
+        return;
+      }
+
+      state.selectedOutputDevice = deviceId;
+      localStorage.setItem('selectedOutputDevice', deviceId);
+      updateDeviceStatus();
+      addSystemMessage(`Çıkış cihazı değiştiriliyor...`, 'info');
+    }
+
     async function initAudio() {
       try {
         if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
@@ -3971,7 +4390,11 @@
           return false;
         }
 
-        state.localStream = await navigator.mediaDevices.getUserMedia(CONFIG.audioConstraints);
+        // Cihazları listele
+        await enumerateAudioDevices();
+
+        const audioConstraints = getAudioConstraints();
+        state.localStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
 
         const AudioContextClass = window.AudioContext || window.webkitAudioContext;
         state.audioContext = new AudioContextClass();
@@ -3988,7 +4411,9 @@
           track.enabled = false;
         });
 
-        addSystemMessage('Mikrofon hazır', 'success');
+        const device = state.availableInputDevices.find(d => d.deviceId === state.selectedInputDevice);
+        const deviceName = device?.label || 'Dahili mikrofon';
+        addSystemMessage(`Mikrofon hazır: ${deviceName}`, 'success');
         return true;
       } catch (e) {
         console.error('Ses başlatma hatası:', e);
@@ -4003,6 +4428,99 @@
         }
         return false;
       }
+    }
+
+    // Mikrofon test sesi
+    async function testMicrophone() {
+      try {
+        const constraints = getAudioConstraints();
+        const testStream = await navigator.mediaDevices.getUserMedia({ audio: constraints });
+        const track = testStream.getAudioTracks()[0];
+
+        dom.inputStatusText.textContent = '🎤 Dinleniyor...';
+        dom.inputStatusDot.classList.add('active');
+
+        // Seviye göster
+        const ac = new (window.AudioContext || window.webkitAudioContext)();
+        const source = ac.createMediaStreamSource(testStream);
+        const analyser = ac.createAnalyser();
+        analyser.fftSize = 64;
+        source.connect(analyser);
+
+        const data = new Uint8Array(analyser.frequencyBinCount);
+        let detected = false;
+
+        const interval = setInterval(() => {
+          analyser.getByteFrequencyData(data);
+          const avg = data.reduce((a, b) => a + b, 0) / data.length;
+          if (avg > 10) {
+            detected = true;
+            dom.inputStatusText.textContent = `🎤 Ses algılandı! Seviye: ${Math.round(avg)}%`;
+          }
+        }, 200);
+
+        // 3 saniye sonra durdur
+        setTimeout(() => {
+          clearInterval(interval);
+          track.stop();
+          ac.close();
+          if (detected) {
+            dom.inputStatusText.textContent = '✓ Mikrofon çalışıyor!';
+          } else {
+            dom.inputStatusText.textContent = 'Mikrofon aktif ama ses algılanmadı';
+          }
+        }, 3000);
+      } catch (e) {
+        dom.inputStatusText.textContent = `Hata: ${e.message}`;
+      }
+    }
+
+    // Hoparlör test sesi
+    function testSpeaker() {
+      try {
+        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const oscillator = audioContext.createOscillator();
+        const gainNode = audioContext.createGain();
+
+        oscillator.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+        oscillator.frequency.setValueAtTime(440, audioContext.currentTime);
+        oscillator.type = 'sine';
+        gainNode.gain.setValueAtTime(0.1, audioContext.currentTime);
+
+        oscillator.start();
+        oscillator.stop(audioContext.currentTime + 0.5);
+
+        if (audioContext.destination.setSinkId && state.selectedOutputDevice) {
+          audioContext.setSinkId(state.selectedOutputDevice);
+        }
+
+        dom.outputStatusText.textContent = '🔊 Test sesi çalınıyor...';
+        setTimeout(() => {
+          dom.outputStatusText.textContent = 'Test tamamlandı';
+        }, 600);
+      } catch (e) {
+        dom.outputStatusText.textContent = `Hata: ${e.message}`;
+      }
+    }
+
+    async function playAudio(stream) {
+      if (state.audioContext && state.audioContext.state === 'suspended') {
+        state.audioContext.resume();
+      }
+
+      const audio = new Audio();
+      audio.srcObject = stream;
+
+      if (state.selectedOutputDevice && typeof audio.setSinkId === 'function') {
+        try {
+          await audio.setSinkId(state.selectedOutputDevice);
+        } catch (e) {
+          console.warn('Çıkış cihazı değiştirilemedi:', e);
+        }
+      }
+
+      audio.play().catch(e => console.error('Ses çalma hatası:', e));
     }
 
     function playAudio(stream) {
@@ -4519,6 +5037,79 @@
     // Event Listeners
     // ==========================================
 
+    // Settings Modal
+    dom.settingsBtn.addEventListener('click', () => {
+      enumerateAudioDevices();
+      dom.settingsModal.classList.remove('hidden');
+      dom.settingsModal.classList.add('active');
+    });
+
+    dom.settingsModalClose.addEventListener('click', () => {
+      dom.settingsModal.classList.remove('active');
+      dom.settingsModal.classList.add('hidden');
+    });
+
+    dom.settingsModal.addEventListener('click', (e) => {
+      if (e.target === dom.settingsModal) {
+        dom.settingsModal.classList.remove('active');
+        dom.settingsModal.classList.add('hidden');
+      }
+    });
+
+    // Mikrofon cihazı değiştir
+    dom.inputDeviceSelect.addEventListener('change', async () => {
+      const deviceId = dom.inputDeviceSelect.value;
+      state.selectedInputDevice = deviceId || null;
+      localStorage.setItem('selectedInputDevice', state.selectedInputDevice || '');
+      updateDeviceStatus();
+
+      // Eğer aktif bir ses akışı varsa, yeniden başlat
+      if (state.localStream && deviceId) {
+        const audioConstraints = getAudioConstraints();
+        try {
+          const newStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+          const newTrack = newStream.getAudioTracks()[0];
+          state.localStream.getTracks().forEach(t => t.stop());
+          state.localStream = newStream;
+
+          // Mevcut PeerConnection'lara yeni track ekle
+          state.peerConnections.forEach((pc) => {
+            const senders = pc.getSenders();
+            const audioSender = senders.find(s => s.track && s.track.kind === 'audio');
+            if (audioSender) {
+              audioSender.replaceTrack(newTrack);
+            }
+          });
+
+          newTrack.enabled = state.isTransmitting;
+          updateDeviceStatus();
+          addSystemMessage(`Mikrofon değiştirildi: ${state.availableInputDevices.find(d => d.deviceId === deviceId)?.label || 'Bilinmeyen'}`, 'success');
+        } catch (e) {
+          addSystemMessage(`Mikrofon değiştirilemedi: ${e.message}`, 'error');
+        }
+      }
+    });
+
+    // Hoparlör cihazı değiştir
+    dom.outputDeviceSelect.addEventListener('change', () => {
+      const deviceId = dom.outputDeviceSelect.value;
+      state.selectedOutputDevice = deviceId || null;
+      localStorage.setItem('selectedOutputDevice', state.selectedOutputDevice || '');
+      updateDeviceStatus();
+    });
+
+    // Mikrofon testi
+    dom.testMicBtn.addEventListener('click', testMicrophone);
+
+    // Hoparlör testi
+    dom.testSpeakerBtn.addEventListener('click', testSpeaker);
+
+    // Cihaz değişikliklerini izle (yeni BT cihazı bağlandığında güncelle)
+    navigator.mediaDevices?.addEventListener('devicechange', () => {
+      console.log('🔄 Ses cihazı değişikliği algılandı');
+      enumerateAudioDevices();
+    });
+
     // Double-click to join
     document.getElementById('channel-buttons').addEventListener('dblclick', () => {
       if (state.selectedChannel) {
@@ -4726,6 +5317,12 @@
     // Başlatma
     // ==========================================
     (async function init() {
+      // Kayıtlı cihaz tercihlerini yükle
+      const savedInput = localStorage.getItem('selectedInputDevice');
+      if (savedInput) state.selectedInputDevice = savedInput || null;
+      const savedOutput = localStorage.getItem('selectedOutputDevice');
+      if (savedOutput) state.selectedOutputDevice = savedOutput || null;
+
       await loadChannelsFromServer();
       initializeChannels();
       initGPS();

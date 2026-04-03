@@ -1,19 +1,24 @@
 {
-  "adminToken": "",
+  "adminToken": "deec0017c8b775e94ad33f09dc9f442b823b4573ed278501",
+  "adminTokenShown": true,
   "users": [],
   "channels": [
     {
-      "name": "ACIL",
+      "name": "TEST",
       "password": null,
       "createdBy": "admin"
     },
     {
-      "name": "TRST",
-      "createdBy": "admin",
+      "name": "ACIL",
+      "password": "a665a45920422f9d417e4867efdc4fb8a04a1f3fff1fa07e998e86f7f7a27ae3",
+      "createdBy": "admin"
+    },
+    {
+      "name": "ACILNO",
+      "password": null,
+      "createdBy": "admin"
     }
   ],
-  "adminTokenShown": true,
-  "bannedUsernames": [],
-  "bannedIPs": [],
-  "bannedDeviceIds": []
+  "bannedDeviceIds": [],
+  "bannedUsernames": []
 }
