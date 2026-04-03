@@ -1,5 +1,5 @@
 {
-  "adminToken": "deec0017c8b775e94ad33f09dc9f442b823b4573ed278501",
+  "adminToken": "",
   "adminTokenShown": true,
   "users": [],
   "channels": [
@@ -10,7 +10,7 @@
     },
     {
       "name": "ACIL",
-      "password": "",
+      "password": "null",
       "createdBy": "admin"
     },
     {
