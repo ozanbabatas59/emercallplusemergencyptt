@@ -18,10 +18,11 @@ import { randomBytes, createHash } from 'crypto';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const PORT = 4000;
-const HTTP_PORT = 4000;
-const HOST = '0.0.0.0';
-const DATA_FILE = join(__dirname, 'data.json');
+// Production: PORT ortam değişkenini destekle
+const PORT = process.env.PORT || 4000;
+const HTTP_PORT = PORT;
+const HOST = process.env.HOST || '0.0.0.0';
+const DATA_FILE = process.env.DATA_FILE || join(__dirname, 'data.json');
 
 // Oda yönetimi: { odaAdi: { clientId: ws } }
 const rooms = new Map();
@@ -561,6 +562,28 @@ const httpServer = createServer(async (req, res) => {
       totalRooms: rooms.size,
       totalClients: clients.size,
       rooms: roomStats
+    }));
+    return;
+  }
+
+  // API: Health Check (Production deploy için)
+  if (url.pathname === '/health' && req.method === 'GET') {
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({
+      status: 'ok',
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+      clients: clients.size,
+      rooms: rooms.size
+    }));
+    return;
+  }
+
+  // API: Ready Check (K8s/Docker health probe için)
+  if (url.pathname === '/ready' && req.method === 'GET') {
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({
+      status: 'ready'
     }));
     return;
   }

@@ -1,0 +1,34 @@
+{
+  "adminToken": "AUTO_GENERATED_ON_FIRST_RUN",
+  "adminTokenShown": false,
+  "users": [],
+  "channels": [
+    {
+      "name": "ALFA-1",
+      "password": null,
+      "createdBy": "system"
+    },
+    {
+      "name": "BRAVO-2",
+      "password": null,
+      "createdBy": "system"
+    },
+    {
+      "name": "CHARLİ-3",
+      "password": null,
+      "createdBy": "system"
+    },
+    {
+      "name": "DELTA-4",
+      "password": null,
+      "createdBy": "system"
+    },
+    {
+      "name": "EKO-5",
+      "password": null,
+      "createdBy": "system"
+    }
+  ],
+  "bannedDeviceIds": [],
+  "bannedUsernames": []
+}

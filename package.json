@@ -4,7 +4,11 @@
   "type": "module",
   "main": "serve.mjs",
   "scripts": {
-    "start": "node serve.mjs"
+    "start": "node serve.mjs",
+    "healthcheck": "node -e \"require('http').get('http://localhost:' + (process.env.PORT || 4000) + '/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))\""
+  },
+  "engines": {
+    "node": ">=18.0.0"
   },
   "dependencies": {
     "ws": "^8.16.0"

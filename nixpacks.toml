@@ -3,3 +3,18 @@ cmds = ["npm install"]
 
 [start]
 cmd = "node serve.mjs"
+
+[phases.build]
+cmds = []
+
+[variables]
+PORT = "4000"
+NODE_ENV = "production"
+
+[healthcheck]
+path = "/health"
+port = 4000
+test = "curl -f http://localhost:4000/health || exit 1"
+interval = 30
+timeout = 10
+retries = 3
