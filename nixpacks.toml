@@ -1,15 +1,19 @@
 [phases.install]
-cmds = ["npm install"]
+cmds = ["npm ci"]
+
+[phases.build]
+cmds = ["npm run build"]
 
 [start]
 cmd = "node serve.mjs"
 
-[phases.build]
-cmds = []
-
 [variables]
-PORT = "4000"
 NODE_ENV = "production"
+PORT = "4000"
+MAX_CONNECTIONS = "1000"
+MAX_CONNECTIONS_PER_IP = "999999"
+MESSAGE_BATCH_SIZE = "100"
+MESSAGE_BATCH_TIMEOUT = "10"
 
 [healthcheck]
 path = "/health"

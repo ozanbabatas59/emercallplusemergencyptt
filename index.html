@@ -3312,7 +3312,7 @@
           channels.forEach(ch => {
             state.availableChannels.set(ch.name, {
               name: ch.name,
-              hasPassword: !!ch.password,
+              hasPassword: !!ch.has_password,
               users: 0
             });
           });
@@ -4847,9 +4847,9 @@
         const div = document.createElement('div');
         div.className = 'admin-channel-item';
         div.innerHTML = `
-          <span class="admin-channel-name ${ch.password ? 'locked' : ''}">${ch.name}${ch.password ? ' 🔒' : ''}</span>
+          <span class="admin-channel-name ${ch.has_password ? 'locked' : ''}">${ch.name}${ch.has_password ? ' 🔒' : ''}</span>
           <div class="admin-channel-actions">
-            <button class="btn btn-small" data-action="password" data-channel="${ch.name}">${ch.password ? 'Şifreyi Kaldır' : 'Şifre Belirle'}</button>
+            <button class="btn btn-small" data-action="password" data-channel="${ch.name}">${ch.has_password ? 'Şifreyi Kaldır' : 'Şifre Belirle'}</button>
             <button class="btn btn-small btn-danger" data-action="delete" data-channel="${ch.name}">Sil</button>
           </div>
         `;

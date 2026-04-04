@@ -4,119 +4,188 @@
  * GPS koordinat takip sistemi
  * Peer-to-peer ses ağ mesh için WebRTC sinyalleme
  * Kullanıcı yönetimi, kanal şifreleri, cihaz yasakları
+ *
+ * Production Optimized:
+ * - SQLite database with better-sqlite3
+ * - WebSocket compression
+ * - Connection pooling and limits
+ * - In-memory caching layer
+ * - Message batching
  */
 
 import { WebSocketServer } from 'ws';
 import { createServer } from 'http';
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { networkInterfaces } from 'os';
 import { randomBytes, createHash } from 'crypto';
+import { gzip, createGzip } from 'zlib';
+import { promisify } from 'util';
+
+// Database functions - will be initialized after database is ready
+let dbFunctions = null;
+
+const gzipAsync = promisify(gzip);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Production: PORT ortam değişkenini destekle
+// ===== CONFIGURATION =====
 const PORT = process.env.PORT || 4000;
 const HTTP_PORT = PORT;
 const HOST = process.env.HOST || '0.0.0.0';
-const DATA_FILE = process.env.DATA_FILE || join(__dirname, 'data.json');
+const NODE_ENV = process.env.NODE_ENV || 'development';
+const IS_PROD = NODE_ENV === 'production';
 
-// Oda yönetimi: { odaAdi: { clientId: ws } }
+// Performance limits
+const MAX_CONNECTIONS = parseInt(process.env.MAX_CONNECTIONS || '1000');
+// IP limit disabled for local + remote compatibility
+const MAX_CONNECTIONS_PER_IP = parseInt(process.env.MAX_CONNECTIONS_PER_IP || '999999');
+const MESSAGE_BATCH_SIZE = parseInt(process.env.MESSAGE_BATCH_SIZE || '100');
+const MESSAGE_BATCH_TIMEOUT = parseInt(process.env.MESSAGE_BATCH_TIMEOUT || '10');
+const HEARTBEAT_INTERVAL = 30000; // 30 seconds
+const CONNECTION_TIMEOUT = 120000; // 2 minutes
+const SESSION_CLEANUP_INTERVAL = 300000; // 5 minutes
+
+// Rate limiting
+const RATE_LIMIT_WINDOW = 60000; // 1 dakika
+const RATE_LIMIT_MAX_REQUESTS = 100; // Dakikada 100 istek
+
+// ===== DATABASE =====
+let db = null;
+let channelPasswordsCache = new Map();
+let bannedDevicesCache = new Set();
+let bannedUsernamesCache = new Set();
+
+async function initDatabase() {
+  const { initDatabase: initDB, getChannels, getBannedDevices, getBannedUsernames, getChannelPassword, getSetting, setSetting, DB_PATH } = await import('./lib/database.js');
+  db = initDB();
+
+  console.log('📁 SQLite Database initialized');
+  console.log(`   Path: ${DB_PATH}`);
+
+  // Load channels into cache
+  const channels = getChannels();
+  for (const ch of channels) {
+    const pwd = getChannelPassword(ch.name);
+    if (pwd) channelPasswordsCache.set(ch.name, pwd);
+  }
+
+  // Load bans into cache
+  bannedDevicesCache = getBannedDevices();
+  bannedUsernamesCache = getBannedUsernames();
+
+  // Get or create admin token
+  let adminToken = getSetting('admin_token');
+  if (!adminToken) {
+    adminToken = randomBytes(24).toString('hex');
+    setSetting('admin_token', adminToken);
+    setSetting('admin_token_shown', '0');
+  }
+
+  console.log(`   Channels: ${channels.length}`);
+  console.log(`   Banned devices: ${bannedDevicesCache.size}`);
+  console.log(`   Banned usernames: ${bannedUsernamesCache.size}`);
+
+  // Store database functions for global use
+  const database = await import('./lib/database.js');
+  dbFunctions = database;
+
+  return adminToken;
+}
+
+// ===== IN-MEMORY STATE =====
+// Room management: { roomName: { clientId: ws } }
 const rooms = new Map();
-// İstemci takibi: { ws: { id, room, username, ip, isAdmin, deviceId, latitude, longitude, lastLocationUpdate } }
+// Client tracking: { ws: { id, room, username, ip, isAdmin, deviceId, latitude, longitude, lastLocationUpdate, lastHeartbeat } }
 const clients = new Map();
-// Kanal şifre önbelleği: { odaAdi: passwordHash }
-const channelPasswords = new Map();
-// Yasaklı varlıklar: { IPs: Set(), deviceIds: Set(), usernames: Set() }
-const bannedDeviceIds = new Set();
-const bannedUsernames = new Set();
-// Odalardaki aktif verici: { odaAdi: clientId }
+// Active transmitters per room: { roomName: clientId }
 const activeTransmitters = new Map();
+// Per-IP connection count: { ip: count }
+const ipConnections = new Map();
+// Message batching queues: { ws: [{message, timestamp}, ...] }
+const messageQueues = new Map();
+// Rate limiting: { ip: { count, resetTime } }
+const rateLimitMap = new Map();
 
 let clientIdCounter = 0;
 
-// Veri yapısı
-let appData = {
-  adminToken: null,
-  adminTokenShown: false,
-  users: [],
-  channels: [],
-  bannedDeviceIds: [],
-  bannedUsernames: []
+// ===== WEBSOCKET CONFIGURATION =====
+const wssOptions = {
+  clientTracking: true,
+  maxPayload: 1024 * 1024, // 1MB max message size
+  perMessageDeflate: IS_PROD ? {
+    threshold: 1024, // Only compress messages > 1KB
+    concurrencyLimit: 10,
+    zlibDeflateOptions: {
+      level: 3 // Balance between speed and compression
+    }
+  } : false
 };
 
-// Veriyi başlat veya yükle
-async function initData() {
-  if (existsSync(DATA_FILE)) {
-    try {
-      const content = await readFile(DATA_FILE, 'utf-8');
-      appData = JSON.parse(content);
+// ===== UTILITY FUNCTIONS =====
 
-      // Eski veri yapılarını taşı
-      if (!appData.bannedDeviceIds) appData.bannedDeviceIds = [];
-      if (!appData.bannedUsernames) appData.bannedUsernames = [];
+function getClientIP(req) {
+  // Try to get real IP from headers (works with proxy/cloudflare)
+  const forwarded = req.headers['x-forwarded-for'];
+  const realIP = req.headers['x-real-ip'];
+  const cfIP = req.headers['cf-connecting-ip'];
 
-      // Belleğe yükle
-      appData.bannedDeviceIds.forEach(id => bannedDeviceIds.add(id));
-      appData.bannedUsernames.forEach(name => bannedUsernames.add(name));
-      appData.channels.forEach(ch => {
-        if (ch.password) {
-          channelPasswords.set(ch.name, ch.password);
-        }
-      });
-
-      console.log('📁 Veri data.json dosyasından yüklendi');
-      console.log(`   Kanallar: ${appData.channels.length}`);
-      console.log(`   Yasaklı cihazlar: ${appData.bannedDeviceIds.length}`);
-      console.log(`   Yasaklı kullanıcı adları: ${appData.bannedUsernames.length}`);
-    } catch (e) {
-      console.error('data.json yüklenirken hata:', e);
-    }
-  } else {
-    // İlk yönetici anahtarını oluştur
-    appData.adminToken = randomBytes(24).toString('hex');
-
-    // Varsayılan kanallar
-    appData.channels = [
-      { name: 'ALFA-1', password: null, createdBy: 'system' },
-      { name: 'BRAVO-2', password: null, createdBy: 'system' },
-      { name: 'CHARLİ-3', password: null, createdBy: 'system' },
-      { name: 'DELTA-4', password: null, createdBy: 'system' },
-      { name: 'EKO-5', password: null, createdBy: 'system' }
-    ];
-
-    await saveData();
-    console.log('📁 Varsayılan verilerle data.json oluşturuldu');
+  if (forwarded) {
+    // Take the first IP (original client) from the chain
+    return forwarded.split(',')[0].trim();
   }
 
-  return appData.adminToken;
-}
-
-// Veriyi diske kaydet
-async function saveData() {
-  try {
-    appData.bannedDeviceIds = Array.from(bannedDeviceIds);
-    appData.bannedUsernames = Array.from(bannedUsernames);
-    await writeFile(DATA_FILE, JSON.stringify(appData, null, 2), 'utf-8');
-  } catch (e) {
-    console.error('data.json kaydedilirken hata:', e);
+  if (realIP) {
+    return realIP;
   }
+
+  if (cfIP) {
+    return cfIP;
+  }
+
+  // Fallback to socket remote address
+  // Handle IPv6-mapped IPv4 addresses
+  const remoteAddr = req.socket.remoteAddress;
+  if (remoteAddr && remoteAddr.startsWith('::ffff:')) {
+    return remoteAddr.substring(7);
+  }
+
+  return remoteAddr || 'unknown';
 }
 
-// Şifreleme
+function sanitizeInput(input) {
+  if (typeof input !== 'string') return input;
+  return input
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;')
+    .replace(/\//g, '&#x2F;');
+}
+
+function validateChannelName(name) {
+  if (!name || typeof name !== 'string') return false;
+  return /^[A-Z0-9-]{2,20}$/.test(name);
+}
+
+function validateUsername(username) {
+  if (!username || typeof username !== 'string') return false;
+  return /^[a-zA-Z0-9ÇĞİÖŞÜçğıöşu_-]{2,15}$/.test(username);
+}
+
 function hashPassword(password) {
   return createHash('sha256').update(password).digest('hex');
 }
 
-// Yönetici anahtarı doğrula
 function verifyAdminToken(token) {
-  return token === appData.adminToken;
+  if (!dbFunctions) return false;
+  return token === dbFunctions.getSetting('admin_token');
 }
 
-// Yerel IP adresini al
 function getLocalIP() {
   const interfaces = networkInterfaces();
   for (const name of Object.keys(interfaces)) {
@@ -129,10 +198,7 @@ function getLocalIP() {
   return 'localhost';
 }
 
-// Rate limiting - Basit IP bazlı rate limiter
-const rateLimitMap = new Map();
-const RATE_LIMIT_WINDOW = 60000; // 1 dakika
-const RATE_LIMIT_MAX_REQUESTS = 100; // Dakikada 100 istek
+// ===== RATE LIMITING =====
 
 function checkRateLimit(ip) {
   const now = Date.now();
@@ -157,64 +223,157 @@ function checkRateLimit(ip) {
   return true;
 }
 
-function getClientIP(req) {
-  return req.headers['x-forwarded-for']?.split(',')[0]?.trim() ||
-         req.socket.remoteAddress ||
-         'unknown';
+// ===== CONNECTION MANAGEMENT =====
+
+function trackConnection(ip) {
+  const count = ipConnections.get(ip) || 0;
+  ipConnections.set(ip, count + 1);
+  return count + 1;
 }
 
-// Input sanitization
-function sanitizeInput(input) {
-  if (typeof input !== 'string') return input;
-  // XSS önleme - HTML karakterlerini escape et
-  return input
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#x27;')
-    .replace(/\//g, '&#x2F;');
+function untrackConnection(ip) {
+  const count = ipConnections.get(ip) || 0;
+  if (count <= 1) {
+    ipConnections.delete(ip);
+  } else {
+    ipConnections.set(ip, count - 1);
+  }
 }
 
-function validateChannelName(name) {
-  if (!name || typeof name !== 'string') return false;
-  // Sadece harf, rakam ve tire, 2-20 karakter
-  return /^[A-Z0-9-]{2,20}$/.test(name);
+function canAcceptConnection(ip) {
+  // Check global limit
+  if (clients.size >= MAX_CONNECTIONS) {
+    return false;
+  }
+
+  // Check per-IP limit
+  const ipCount = ipConnections.get(ip) || 0;
+  return ipCount < MAX_CONNECTIONS_PER_IP;
 }
 
-function validateUsername(username) {
-  if (!username || typeof username !== 'string') return false;
-  // 2-15 karakter, alfanumerik ve bazı özel karakterler
-  return /^[a-zA-Z0-9ÇĞİÖŞÜçğıöşu_-]{2,15}$/.test(username);
+// ===== MESSAGE BATCHING =====
+
+function queueMessage(ws, message) {
+  if (!messageQueues.has(ws)) {
+    messageQueues.set(ws, []);
+  }
+
+  const queue = messageQueues.get(ws);
+  queue.push({ message, timestamp: Date.now() });
+
+  if (queue.length >= MESSAGE_BATCH_SIZE) {
+    flushMessageQueue(ws);
+  } else {
+    // Set timeout to flush pending messages
+    setTimeout(() => flushMessageQueue(ws), MESSAGE_BATCH_TIMEOUT);
+  }
 }
 
-// HTTP sunucusu API uç noktaları ile
+function flushMessageQueue(ws) {
+  const queue = messageQueues.get(ws);
+  if (!queue || queue.length === 0) return;
+
+  if (ws.readyState === 1) {
+    // Send as array if multiple messages
+    if (queue.length > 1) {
+      ws.send(JSON.stringify({
+        type: 'batch',
+        messages: queue.map(item => item.message)
+      }));
+    } else {
+      ws.send(JSON.stringify(queue[0].message));
+    }
+  }
+
+  queue.length = 0;
+}
+
+// ===== BROADCASTING =====
+
+function broadcastToRoom(room, message, excludeWs = null) {
+  const roomClients = rooms.get(room);
+  if (!roomClients) return;
+
+  const messageStr = JSON.stringify(message);
+  const sent = new Set();
+
+  for (const [id, ws] of Object.entries(roomClients)) {
+    if (ws !== excludeWs && ws.readyState === 1 && !sent.has(ws)) {
+      ws.send(messageStr);
+      sent.add(ws);
+    }
+  }
+}
+
+function broadcastToAll(message, excludeWs = null) {
+  const messageStr = JSON.stringify(message);
+
+  for (const [ws, client] of clients) {
+    if (ws !== excludeWs && ws.readyState === 1) {
+      ws.send(messageStr);
+    }
+  }
+}
+
+function getRoomUsers(room) {
+  const roomClients = rooms.get(room);
+  if (!roomClients) return [];
+
+  return Object.entries(roomClients).map(([id, ws]) => {
+    const client = clients.get(ws);
+    return {
+      id,
+      username: client?.username || `User-${id.slice(0, 4)}`,
+      latitude: client?.latitude,
+      longitude: client?.longitude
+    };
+  });
+}
+
+function getRoomUserCount(room) {
+  const roomClients = rooms.get(room);
+  return roomClients ? Object.keys(roomClients).length : 0;
+}
+
+// ===== HTTP SERVER =====
+
 const httpServer = createServer(async (req, res) => {
   const clientIP = getClientIP(req);
 
-  // Rate limiting kontrolü
+  // Rate limiting
   if (!checkRateLimit(clientIP)) {
     res.statusCode = 429;
     res.setHeader('Content-Type', 'application/json');
-    res.end(JSON.stringify({ error: 'Çok fazla istek - lütfen bekleyin' }));
+    res.end(JSON.stringify({ error: 'Too many requests - please wait' }));
     return;
   }
 
-  // Security Headers (OWASP recommendations)
+  // Security Headers (OWASP)
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('X-XSS-Protection', '1; mode=block');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Permissions-Policy', 'geolocation=(self), microphone=(self)');
+  res.setHeader('Content-Security-Policy',
+    "default-src 'self'; " +
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+    "font-src 'self' https://fonts.gstatic.com; " +
+    "connect-src 'self' ws: wss:; " +
+    "img-src 'self' data: https://unpkg.com https://placehold.co https://*.tile.openstreetmap.org https://*.openstreetmap.org; " +
+    "media-src 'self' blob:; " +
+    "object-src 'none'; " +
+    "base-uri 'self';"
+  );
   res.removeHeader('X-Powered-By');
 
-  // CORS - Sadece same origin için (intrabet kullanımı)
+  // CORS - Allow all origins for local and remote access
   const origin = req.headers.origin;
-  if (origin && origin === `http://${req.headers.host}` || origin === `http://localhost:${PORT}` || origin === `http://127.0.0.1:${PORT}`) {
+  if (origin) {
     res.setHeader('Access-Control-Allow-Origin', origin);
   }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Admin-Token, X-Device-ID');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Admin-Token, X-Device-ID, Accept-Encoding');
   res.setHeader('Access-Control-Allow-Credentials', 'false');
   res.setHeader('Access-Control-Max-Age', '3600');
 
@@ -224,22 +383,21 @@ const httpServer = createServer(async (req, res) => {
     return;
   }
 
-  // URL'yi ayrıştır
   const url = new URL(req.url, `http://${req.headers.host}`);
 
-  // GÜVENLİK: Hassas dosyalara erişimi engelle
+  // Block access to sensitive files
   if (url.pathname.includes('data.json') ||
       url.pathname.includes('package.json') ||
       url.pathname.includes('.env') ||
-      url.pathname.includes('serve.mjs')) {
+      url.pathname.includes('serve.mjs') ||
+      url.pathname.includes('.db')) {
     res.statusCode = 403;
-    res.end('Erişim reddedildi');
+    res.end('Forbidden');
     return;
   }
 
-  // Sadece izin verilen dosyalar sunulsun
+  // Serve static files from /lib/
   if (url.pathname.startsWith('/lib/')) {
-    // Leaflet kütüphanesi dosyalarını sun
     const filePath = join(__dirname, url.pathname);
     try {
       const content = await readFile(filePath);
@@ -247,197 +405,200 @@ const httpServer = createServer(async (req, res) => {
       const contentType = ext === 'css' ? 'text/css' :
                          ext === 'js' ? 'text/javascript' :
                          ext === 'png' ? 'image/png' : 'application/octet-stream';
+
       res.setHeader('Content-Type', `${contentType}; charset=utf-8`);
-      res.end(content);
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable'); // 1 year cache
+
+      // Check if client accepts gzip
+      const acceptEncoding = req.headers['accept-encoding'] || '';
+      if (acceptEncoding.includes('gzip') && IS_PROD) {
+        const compressed = await gzipAsync(content);
+        res.setHeader('Content-Encoding', 'gzip');
+        res.setHeader('Content-Length', compressed.length);
+        res.end(compressed);
+      } else {
+        res.setHeader('Content-Length', content.length);
+        res.end(content);
+      }
       return;
     } catch (err) {
       res.statusCode = 404;
-      res.end('Dosya bulunamadı');
+      res.end('Not found');
       return;
     }
   }
 
-  if (url.pathname !== '/' && url.pathname !== '/index.html' && !url.pathname.startsWith('/api/')) {
-    res.statusCode = 404;
-    res.end('Bulunamadı');
-    return;
-  }
-
-  // index.html sun
-  if (req.url === '/' || req.url === '/index.html') {
+  // Serve index.html
+  if (url.pathname === '/' || url.pathname === '/index.html') {
     try {
-      const content = await readFile(join(__dirname, 'index.html'), 'utf-8');
+      const indexPath = IS_PROD && existsSync(join(__dirname, 'dist', 'index.html'))
+        ? join(__dirname, 'dist', 'index.html')
+        : join(__dirname, 'index.html');
+
+      const content = await readFile(indexPath, 'utf-8');
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      // CSP Header ekleyelim
-      res.setHeader('Content-Security-Policy',
-        "default-src 'self'; " +
-        "script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
-        "font-src 'self' https://fonts.gstatic.com; " +
-        "connect-src 'self' ws: wss:; " +
-        "img-src 'self' data: https://unpkg.com https://placehold.co https://*.tile.openstreetmap.org https://*.openstreetmap.org; " +
-        "media-src 'self' blob:; " +
-        "object-src 'none'; " +
-        "base-uri 'self';"
-      );
-      res.end(content);
+      res.setHeader('Cache-Control', IS_PROD ? 'public, max-age=3600' : 'no-cache');
+
+      if (acceptsGzip(req) && IS_PROD) {
+        const compressed = await gzipAsync(content);
+        res.setHeader('Content-Encoding', 'gzip');
+        res.setHeader('Content-Length', compressed.length);
+        res.end(compressed);
+      } else {
+        res.end(content);
+      }
     } catch (err) {
+      console.error('[ERROR] index.html error:', err);
       res.statusCode = 500;
-      res.end('Sunucu hatası');
+      res.setHeader('Content-Type', 'text/plain');
+      res.end(`Server error: ${err.message}`);
     }
     return;
   }
 
-  // API: Kanalları getir
+  // API: Get channels
   if (url.pathname === '/api/channels' && req.method === 'GET') {
+    const { getChannels } = await import('./lib/database.js');
     res.setHeader('Content-Type', 'application/json');
-    res.end(JSON.stringify(appData.channels));
+    res.setHeader('Cache-Control', 'public, max-age=10');
+    res.end(JSON.stringify(getChannels()));
     return;
   }
 
-  // API: Kanal oluştur (sadece yönetici)
+  // API: Create channel (admin only)
   if (url.pathname === '/api/channels' && req.method === 'POST') {
     const token = req.headers['x-admin-token'];
     if (!verifyAdminToken(token)) {
       res.statusCode = 401;
       res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({ error: 'Yetkisiz erisim' }));
+      res.end(JSON.stringify({ error: 'Unauthorized' }));
       return;
     }
 
     try {
       const body = JSON.parse(await getBody(req));
 
-      // Input validation
       if (!validateChannelName(body.name)) {
         res.statusCode = 400;
         res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({ error: 'Gecersiz kanal adi' }));
+        res.end(JSON.stringify({ error: 'Invalid channel name' }));
         return;
       }
 
       if (body.password && typeof body.password !== 'string') {
         res.statusCode = 400;
         res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({ error: 'Gecersiz sifre' }));
+        res.end(JSON.stringify({ error: 'Invalid password' }));
         return;
       }
 
       const channelName = body.name.toUpperCase();
+      const { createChannel, channelExists } = await import('./lib/database.js');
 
-      // Kanal zaten var mı kontrol et
-      if (appData.channels.find(ch => ch.name === channelName)) {
+      if (channelExists(channelName)) {
         res.statusCode = 409;
         res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({ error: 'Kanal zaten mevcut' }));
+        res.end(JSON.stringify({ error: 'Channel already exists' }));
         return;
       }
 
-      const channel = {
-        name: channelName,
-        password: body.password ? hashPassword(body.password) : null,
-        createdBy: body.admin || 'admin'
-      };
-      appData.channels.push(channel);
-      if (channel.password) {
-        channelPasswords.set(channel.name, channel.password);
+      const password = body.password ? hashPassword(body.password) : null;
+      createChannel(channelName, password, body.admin || 'admin');
+
+      if (password) {
+        channelPasswordsCache.set(channelName, password);
       }
-      await saveData();
 
       res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({ success: true, channel: { name: channel.name, hasPassword: !!channel.password } }));
+      res.end(JSON.stringify({
+        success: true,
+        channel: { name: channelName, hasPassword: !!password }
+      }));
     } catch (e) {
-      console.error('Kanal olusturma hatasi:', e);
+      console.error('Channel creation error:', e);
       res.statusCode = 400;
       res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({ error: 'Gecersiz istek' }));
+      res.end(JSON.stringify({ error: 'Invalid request' }));
     }
     return;
   }
 
-  // API: Kanal sil (sadece yönetici)
+  // API: Delete channel (admin only)
   if (url.pathname.startsWith('/api/channels/') && req.method === 'DELETE') {
     const token = req.headers['x-admin-token'];
     if (!verifyAdminToken(token)) {
       res.statusCode = 401;
       res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({ error: 'Yetkisiz erisim' }));
+      res.end(JSON.stringify({ error: 'Unauthorized' }));
       return;
     }
 
     const channelName = url.pathname.split('/').pop();
 
-    // Input validation - channel name
     if (!validateChannelName(channelName)) {
       res.statusCode = 400;
       res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({ error: 'Gecersiz kanal adi' }));
+      res.end(JSON.stringify({ error: 'Invalid channel name' }));
       return;
     }
 
-    appData.channels = appData.channels.filter(ch => ch.name !== channelName);
-    channelPasswords.delete(channelName);
-    await saveData();
+    const { deleteChannel } = await import('./lib/database.js');
+    deleteChannel(channelName);
+    channelPasswordsCache.delete(channelName);
 
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ success: true }));
     return;
   }
 
-  // API: Kanal şifresi belirle (sadece yönetici)
+  // API: Set channel password (admin only)
   if (url.pathname === '/api/channels/password' && req.method === 'POST') {
     const token = req.headers['x-admin-token'];
     if (!verifyAdminToken(token)) {
       res.statusCode = 401;
       res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({ error: 'Yetkisiz erisim' }));
+      res.end(JSON.stringify({ error: 'Unauthorized' }));
       return;
     }
 
     try {
       const body = JSON.parse(await getBody(req));
 
-      // Input validation
       if (!validateChannelName(body.name)) {
         res.statusCode = 400;
         res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({ error: 'Gecersiz kanal adi' }));
+        res.end(JSON.stringify({ error: 'Invalid channel name' }));
         return;
       }
 
-      if (body.password && typeof body.password !== 'string') {
-        res.statusCode = 400;
-        res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({ error: 'Gecersiz sifre' }));
-        return;
-      }
+      const { setChannelPassword, getChannel } = await import('./lib/database.js');
+      const channel = getChannel(body.name);
 
-      const channel = appData.channels.find(ch => ch.name === body.name);
       if (!channel) {
         res.statusCode = 404;
-        res.end('Kanal bulunamadı');
+        res.end('Channel not found');
         return;
       }
 
-      if (body.password) {
-        channel.password = hashPassword(body.password);
-        channelPasswords.set(channel.name, channel.password);
+      const password = body.password ? hashPassword(body.password) : null;
+      setChannelPassword(body.name, password);
+
+      if (password) {
+        channelPasswordsCache.set(body.name, password);
       } else {
-        channel.password = null;
-        channelPasswords.delete(channel.name);
+        channelPasswordsCache.delete(body.name);
       }
-      await saveData();
 
       res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({ success: true, hasPassword: !!channel.password }));
+      res.end(JSON.stringify({ success: true, hasPassword: !!password }));
     } catch (e) {
       res.statusCode = 400;
-      res.end('Geçersiz istek');
+      res.end('Invalid request');
     }
     return;
   }
 
-  // API: Yönetici kimlik doğrulama
+  // API: Admin authentication
   if (url.pathname === '/api/auth/admin' && req.method === 'POST') {
     try {
       const body = JSON.parse(await getBody(req));
@@ -446,21 +607,20 @@ const httpServer = createServer(async (req, res) => {
       res.end(JSON.stringify({ valid }));
     } catch (e) {
       res.statusCode = 400;
-      res.end('Geçersiz istek');
+      res.end('Invalid request');
     }
     return;
   }
 
-  // API: Kullanıcıları getir (sadece yönetici)
+  // API: Get users (admin only)
   if (url.pathname === '/api/users' && req.method === 'GET') {
     const token = req.headers['x-admin-token'];
     if (!verifyAdminToken(token)) {
       res.statusCode = 401;
-      res.end('Yetkisiz');
+      res.end('Unauthorized');
       return;
     }
 
-    // Odalardaki çevrimiçi kullanıcıları al
     const onlineUsers = [];
     for (const [roomName, roomClients] of rooms) {
       for (const [id, ws] of Object.entries(roomClients)) {
@@ -470,26 +630,31 @@ const httpServer = createServer(async (req, res) => {
             id,
             username: client.username,
             room: roomName,
-            deviceId: client.deviceId
+            deviceId: client.deviceId,
+            latitude: client.latitude,
+            longitude: client.longitude
           });
         }
       }
     }
 
+    const { getBans } = await import('./lib/database.js');
+    const bans = getBans();
+
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({
       online: onlineUsers,
-      banned: [...appData.bannedDeviceIds, ...appData.bannedUsernames]
+      banned: bans.map(b => `${b.type}:${b.value}`)
     }));
     return;
   }
 
-  // API: Yasakla (sadece yönetici) - sadece cihaz ID ile
+  // API: Ban user (admin only)
   if (url.pathname === '/api/users/ban' && req.method === 'POST') {
     const token = req.headers['x-admin-token'];
     if (!verifyAdminToken(token)) {
       res.statusCode = 401;
-      res.end('Yetkisiz');
+      res.end('Unauthorized');
       return;
     }
 
@@ -499,74 +664,81 @@ const httpServer = createServer(async (req, res) => {
 
       if (!deviceId) {
         res.statusCode = 400;
-        res.end('deviceId gerekli');
+        res.end('Device ID required');
         return;
       }
 
-      // Cihaz ID ile yasakla
-      bannedDeviceIds.add(deviceId);
+      const { addBan } = await import('./lib/database.js');
+      addBan('device', deviceId, 'admin');
+      bannedDevicesCache.add(deviceId);
 
-      // Yasaklı cihaz kullanıcılarını bağlantısını kes
+      // Disconnect banned device
       for (const [ws, client] of clients) {
         if (client.deviceId === deviceId) {
           ws.send(JSON.stringify({
             type: 'error',
-            message: 'Bu sunucudan yasaklandınız'
+            message: 'You have been banned from this server'
           }));
-          ws.close(1008, 'Yasaklı');
+          ws.close(1008, 'Banned');
         }
       }
 
-      await saveData();
       res.setHeader('Content-Type', 'application/json');
       res.end(JSON.stringify({ success: true }));
     } catch (e) {
       res.statusCode = 400;
-      res.end('Geçersiz istek');
+      res.end('Invalid request');
     }
     return;
   }
 
-  // API: Yasağı kaldır (sadece yönetici)
+  // API: Unban user (admin only)
   if (url.pathname.startsWith('/api/users/ban/') && req.method === 'DELETE') {
     const token = req.headers['x-admin-token'];
     if (!verifyAdminToken(token)) {
       res.statusCode = 401;
-      res.end('Yetkisiz');
+      res.end('Unauthorized');
       return;
     }
 
     const deviceId = url.pathname.split('/').pop();
-    if (bannedDeviceIds.delete(deviceId)) {
-      await saveData();
-    }
+    const { removeBan } = await import('./lib/database.js');
+    removeBan('device', deviceId);
+    bannedDevicesCache.delete(deviceId);
 
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ success: true }));
     return;
   }
 
-  // API: Sunucu istatistikleri
+  // API: Server stats
   if (url.pathname === '/api/stats' && req.method === 'GET') {
     const roomStats = [];
     for (const [name, roomClients] of rooms) {
       roomStats.push({
         name,
         users: Object.keys(roomClients).length,
-        hasPassword: !!channelPasswords.get(name)
+        hasPassword: !!channelPasswordsCache.get(name)
       });
     }
 
+    const { getDatabaseStats } = await import('./lib/database.js');
+    const dbStats = getDatabaseStats();
+
     res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Cache-Control', 'public, max-age=5');
     res.end(JSON.stringify({
       totalRooms: rooms.size,
       totalClients: clients.size,
-      rooms: roomStats
+      rooms: roomStats,
+      database: dbStats,
+      uptime: process.uptime(),
+      memory: process.memoryUsage()
     }));
     return;
   }
 
-  // API: Health Check (Production deploy için)
+  // API: Health check
   if (url.pathname === '/health' && req.method === 'GET') {
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({
@@ -574,26 +746,29 @@ const httpServer = createServer(async (req, res) => {
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
       clients: clients.size,
-      rooms: rooms.size
+      rooms: rooms.size,
+      memory: process.memoryUsage(),
+      load: process.cpuUsage()
     }));
     return;
   }
 
-  // API: Ready Check (K8s/Docker health probe için)
+  // API: Ready check
   if (url.pathname === '/ready' && req.method === 'GET') {
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({
-      status: 'ready'
+      status: 'ready',
+      timestamp: new Date().toISOString()
     }));
     return;
   }
 
-  // API: Kullanıcı konumları (GPS)
+  // API: Get user locations (admin only)
   if (url.pathname === '/api/locations' && req.method === 'GET') {
     const token = req.headers['x-admin-token'];
     if (!verifyAdminToken(token)) {
       res.statusCode = 401;
-      res.end('Yetkisiz');
+      res.end('Unauthorized');
       return;
     }
 
@@ -616,34 +791,47 @@ const httpServer = createServer(async (req, res) => {
     return;
   }
 
-  // API: Yönetici anahtarını al (hoşgeldin ekranında göstermek için)
-  // Eğer token yoksa, ilk kullanıcıya oluştur ve göster. Diğer kullanıcılar ekranı görmez.
+  // API: Get admin token (show on first launch)
   if (url.pathname === '/api/admin-token' && req.method === 'GET') {
+    const { getSetting, setSetting } = await import('./lib/database.js');
     res.setHeader('Content-Type', 'application/json');
 
-    // Token yoksa (null veya boş string) oluştur ve ilk kullanıcıya göster
-    if (!appData.adminToken || appData.adminToken === '') {
-      appData.adminToken = randomBytes(24).toString('hex');
-      appData.adminTokenShown = true;
-      await saveData();
-      res.end(JSON.stringify({ token: appData.adminToken, show: true }));
-    } else if (!appData.adminTokenShown) {
-      // Token var ama henüz kimseye gösterilmemiş
-      appData.adminTokenShown = true;
-      await saveData();
-      res.end(JSON.stringify({ token: appData.adminToken, show: true }));
+    const token = getSetting('admin_token');
+    const shown = getSetting('admin_token_shown') === '1';
+
+    if (!token || token === '') {
+      const newToken = randomBytes(24).toString('hex');
+      setSetting('admin_token', newToken);
+      setSetting('admin_token_shown', '1');
+      res.end(JSON.stringify({ token: newToken, show: true }));
+    } else if (!shown) {
+      setSetting('admin_token_shown', '1');
+      res.end(JSON.stringify({ token, show: true }));
     } else {
-      // Token zaten oluşturulmuş ve gösterilmiş, başka kullanıcılara gösterme
       res.end(JSON.stringify({ show: false }));
     }
     return;
   }
 
+  // API: Metrics (Prometheus-style)
+  if (url.pathname === '/metrics' && req.method === 'GET') {
+    const token = req.headers['x-admin-token'];
+    if (!verifyAdminToken(token)) {
+      res.statusCode = 401;
+      res.end('Unauthorized');
+      return;
+    }
+
+    const metrics = generateMetrics();
+    res.setHeader('Content-Type', 'text/plain');
+    res.end(metrics);
+    return;
+  }
+
   res.statusCode = 404;
-  res.end('Bulunamadı');
+  res.end('Not found');
 });
 
-// İstek gövdesini alma yardımcısı
 function getBody(req) {
   return new Promise((resolve) => {
     let data = '';
@@ -652,49 +840,81 @@ function getBody(req) {
   });
 }
 
-// WebSocket sunucusu
-const wss = new WebSocketServer({ server: httpServer, clientTracking: true });
-
-function broadcastToRoom(room, message, excludeWs = null) {
-  const roomClients = rooms.get(room);
-  if (!roomClients) return;
-
-  const messageStr = JSON.stringify(message);
-  for (const [id, ws] of Object.entries(roomClients)) {
-    if (ws !== excludeWs && ws.readyState === 1) {
-      ws.send(messageStr);
-    }
-  }
+function acceptsGzip(req) {
+  const acceptEncoding = req.headers['accept-encoding'] || '';
+  return acceptEncoding.includes('gzip');
 }
 
-function getRoomUsers(room) {
-  const roomClients = rooms.get(room);
-  if (!roomClients) return [];
-  return Object.entries(roomClients).map(([id, ws]) => {
-    const client = clients.get(ws);
-    return { id, username: client?.username || `Kullanıcı-${id.slice(0, 4)}` };
-  });
+function generateMetrics() {
+  const mem = process.memoryUsage();
+  const cpu = process.cpuUsage();
+
+  let metrics = '# EmerCallPlus Metrics\n';
+  metrics += `# TYPE emercall_connections gauge\n`;
+  metrics += `emercall_connections ${clients.size}\n\n`;
+  metrics += `# TYPE emercall_rooms gauge\n`;
+  metrics += `emercall_rooms ${rooms.size}\n\n`;
+  metrics += `# TYPE emercall_memory_bytes gauge\n`;
+  metrics += `emercall_memory_bytes{type="heap_used"} ${mem.heapUsed}\n`;
+  metrics += `emercall_memory_bytes{type="heap_total"} ${mem.heapTotal}\n`;
+  metrics += `emercall_memory_bytes{type="rss"} ${mem.rss}\n\n`;
+  metrics += `# TYPE emercall_uptime_seconds gauge\n`;
+  metrics += `emercall_uptime_seconds ${process.uptime()}\n\n`;
+  metrics += `# TYPE emercall_ip_connections gauge\n`;
+  metrics += `emercall_ip_connections ${ipConnections.size}\n\n`;
+
+  return metrics;
 }
 
-function getRoomUserCount(room) {
-  const roomClients = rooms.get(room);
-  return roomClients ? Object.keys(roomClients).length : 0;
-}
+// ===== WEBSOCKET SERVER =====
+
+const wss = new WebSocketServer({ server: httpServer, ...wssOptions });
 
 wss.on('connection', (ws, req) => {
-  const clientId = `client_${++clientIdCounter}`;
-  clients.set(ws, { id: clientId });
+  const clientIP = getClientIP(req);
 
-  console.log(`[${new Date().toISOString()}] İstemci bağlandı: ${clientId}`);
+  // Check connection limits
+  if (!canAcceptConnection(clientIP)) {
+    ws.close(1008, 'Server full');
+    return;
+  }
+
+  trackConnection(clientIP);
+
+  const clientId = `client_${++clientIdCounter}`;
+  clients.set(ws, {
+    id: clientId,
+    ip: clientIP,
+    lastHeartbeat: Date.now()
+  });
+
+  if (!IS_PROD) {
+    console.log(`[${new Date().toISOString()}] Client connected: ${clientId} from ${clientIP}`);
+    console.log(`  Total connections: ${clients.size}/${MAX_CONNECTIONS}`);
+  }
+
+  // Send ping interval
+  const pingInterval = setInterval(() => {
+    if (ws.readyState === 1) {
+      ws.ping();
+    } else {
+      clearInterval(pingInterval);
+    }
+  }, HEARTBEAT_INTERVAL);
 
   ws.on('message', async (data) => {
     try {
       const message = JSON.parse(data.toString());
       const client = clients.get(ws);
 
+      // Update heartbeat
+      if (client) {
+        client.lastHeartbeat = Date.now();
+      }
+
       switch (message.type) {
         case 'join': {
-          // Varsa önceki odadan ayrıl
+          // Leave previous room
           if (client.room) {
             const oldRoom = rooms.get(client.room);
             if (oldRoom) {
@@ -706,48 +926,55 @@ wss.on('connection', (ws, req) => {
             }
           }
 
-          // Korumalı kanallar için şifre kontrolü
-          const roomPassword = channelPasswords.get(message.room);
+          // Check room password
+          const roomPassword = channelPasswordsCache.get(message.room);
           if (roomPassword) {
             if (!message.password || hashPassword(message.password) !== roomPassword) {
               ws.send(JSON.stringify({
                 type: 'error',
-                message: 'Bu kanal için geçersiz şifre'
+                message: 'Invalid password for this channel'
               }));
               return;
             }
           }
 
-          // Yeni odaya katıl
+          // Join new room
           const room = message.room || 'default';
-          const username = message.username || `Kullanıcı-${clientId.slice(0, 4)}`;
+          const username = message.username || `User-${clientId.slice(0, 4)}`;
+
+          // Validate username
+          if (!validateUsername(username)) {
+            ws.send(JSON.stringify({
+              type: 'error',
+              message: 'Invalid username'
+            }));
+            return;
+          }
+
           client.room = room;
           client.username = username;
           client.deviceId = message.deviceId;
 
-          // Kullanıcı adı yasaklı mı kontrol et
-          if (bannedUsernames.has(username.toLowerCase())) {
+          // Check bans
+          if (bannedUsernamesCache.has(username.toLowerCase())) {
             ws.send(JSON.stringify({
               type: 'error',
-              message: 'Bu sunucudan yasaklandınız'
+              message: 'You have been banned from this server'
             }));
-            ws.close(1008, 'Yasaklı');
-            console.log(`  Yasaklı kullanıcı adı reddedildi: ${username}`);
+            ws.close(1008, 'Banned');
             return;
           }
 
-          // Cihaz ID yasaklı mı kontrol et
-          if (client.deviceId && bannedDeviceIds.has(client.deviceId)) {
+          if (client.deviceId && bannedDevicesCache.has(client.deviceId)) {
             ws.send(JSON.stringify({
               type: 'error',
-              message: 'Bu sunucudan yasaklandınız'
+              message: 'You have been banned from this server'
             }));
-            ws.close(1008, 'Yasaklı');
-            console.log(`  Yasaklı cihaz reddedildi: ${client.deviceId}`);
+            ws.close(1008, 'Banned');
             return;
           }
 
-          // Yönetici kimlik doğrulaması
+          // Admin authentication
           if (message.adminToken && verifyAdminToken(message.adminToken)) {
             client.isAdmin = true;
           }
@@ -757,10 +984,10 @@ wss.on('connection', (ws, req) => {
           }
           rooms.get(room)[clientId] = ws;
 
-          // Yeni istemciye mevcut kullanıcıları gönder
+          // Send existing users to new client
           const roomUsers = getRoomUsers(room);
           const existingUsers = roomUsers.filter(u => u.id !== clientId);
-          const totalUserCount = roomUsers.length + 1; // +1 for self
+          const totalUserCount = roomUsers.length + 1;
 
           ws.send(JSON.stringify({
             type: 'room-joined',
@@ -771,7 +998,7 @@ wss.on('connection', (ws, req) => {
             isAdmin: client.isAdmin || false
           }));
 
-          // Diğerlerini bilgilendir
+          // Notify others
           broadcastToRoom(room, {
             type: 'user-joined',
             userId: clientId,
@@ -779,14 +1006,16 @@ wss.on('connection', (ws, req) => {
             userCount: totalUserCount
           }, ws);
 
-          console.log(`  ${clientId} odaya katıldı: ${room} (${totalUserCount} kullanıcı)`);
+          if (!IS_PROD) {
+            console.log(`  ${clientId} joined room: ${room} (${totalUserCount} users)`);
+          }
           break;
         }
 
         case 'offer':
         case 'answer':
         case 'ice-candidate': {
-          // WebRTC sinyal mesajlarını aktar
+          // WebRTC signaling
           const targetWs = rooms.get(client.room)?.[message.target];
           if (targetWs && targetWs.readyState === 1) {
             targetWs.send(JSON.stringify({
@@ -798,31 +1027,26 @@ wss.on('connection', (ws, req) => {
         }
 
         case 'speaking': {
-          // PTT Mutex - aynı anda sadece bir kişi iletebilir
+          // PTT Mutex - only one transmitter at a time
           const room = client.room;
 
           if (message.speaking) {
-            // İletmeye başlıyor - başka biri zaten iletiyor mu kontrol et
             const currentTx = activeTransmitters.get(room);
             if (currentTx && currentTx !== clientId) {
-              // Başka biri iletiyor, isteği reddet
               ws.send(JSON.stringify({
                 type: 'tx-busy',
                 transmitterId: currentTx
               }));
               break;
             }
-            // İletim izni ver
             activeTransmitters.set(room, clientId);
           } else {
-            // İletimi durdur - sadece mevcut verici durdurabilir
             const currentTx = activeTransmitters.get(room);
             if (currentTx === clientId) {
               activeTransmitters.delete(room);
             }
           }
 
-          // Konuşma durumunu yay
           broadcastToRoom(room, {
             type: 'user-speaking',
             userId: clientId,
@@ -849,13 +1073,17 @@ wss.on('connection', (ws, req) => {
         }
 
         case 'location-update': {
-          // GPS koordinat güncellemesi
+          // GPS coordinate update (throttled to 1s minimum)
+          const now = Date.now();
+          if (client.lastLocationUpdate && now - client.lastLocationUpdate < 1000) {
+            break; // Skip if updated less than 1 second ago
+          }
+
           if (message.latitude !== undefined && message.longitude !== undefined) {
             client.latitude = message.latitude;
             client.longitude = message.longitude;
-            client.lastLocationUpdate = Date.now();
+            client.lastLocationUpdate = now;
 
-            // Odadaki kullanıcılara yay
             if (client.room) {
               broadcastToRoom(client.room, {
                 type: 'user-location-update',
@@ -863,7 +1091,7 @@ wss.on('connection', (ws, req) => {
                 username: client.username,
                 latitude: message.latitude,
                 longitude: message.longitude,
-                timestamp: client.lastLocationUpdate
+                timestamp: now
               }, ws);
             }
           }
@@ -871,7 +1099,6 @@ wss.on('connection', (ws, req) => {
         }
 
         case 'get-room-locations': {
-          // Odadaki tüm kullanıcıların konumlarını iste
           if (client.room) {
             const locations = [];
             const roomClients = rooms.get(client.room);
@@ -897,7 +1124,6 @@ wss.on('connection', (ws, req) => {
           break;
         }
 
-        // Yönetici WebSocket komutları
         case 'admin-auth': {
           ws.send(JSON.stringify({
             type: 'admin-auth-response',
@@ -908,49 +1134,42 @@ wss.on('connection', (ws, req) => {
 
         case 'admin-create-channel': {
           if (!client.isAdmin) {
-            ws.send(JSON.stringify({ type: 'error', message: 'Yetkisiz' }));
+            ws.send(JSON.stringify({ type: 'error', message: 'Unauthorized' }));
             break;
           }
 
           const channelName = message.name.toUpperCase();
-          if (appData.channels.find(ch => ch.name === channelName)) {
-            ws.send(JSON.stringify({ type: 'error', message: 'Kanal zaten mevcut' }));
+          const { createChannel, channelExists } = await import('./lib/database.js');
+
+          if (channelExists(channelName)) {
+            ws.send(JSON.stringify({ type: 'error', message: 'Channel already exists' }));
             break;
           }
 
-          const channel = {
-            name: channelName,
-            password: message.password ? hashPassword(message.password) : null,
-            createdBy: client.username
-          };
-          appData.channels.push(channel);
-          if (channel.password) {
-            channelPasswords.set(channelName, channel.password);
-          }
-          await saveData();
+          const password = message.password ? hashPassword(message.password) : null;
+          createChannel(channelName, password, client.username);
 
-          // Tüm istemcilere yayınla
-          wss.clients.forEach(c => {
-            if (c.readyState === 1) {
-              c.send(JSON.stringify({
-                type: 'channel-created',
-                channel: { ...channel, hasPassword: !!channel.password }
-              }));
-            }
+          if (password) {
+            channelPasswordsCache.set(channelName, password);
+          }
+
+          broadcastToAll({
+            type: 'channel-created',
+            channel: { name: channelName, hasPassword: !!password }
           });
           break;
         }
 
         case 'admin-delete-channel': {
           if (!client.isAdmin) {
-            ws.send(JSON.stringify({ type: 'error', message: 'Yetkisiz' }));
+            ws.send(JSON.stringify({ type: 'error', message: 'Unauthorized' }));
             break;
           }
 
-          appData.channels = appData.channels.filter(ch => ch.name !== message.name);
-          channelPasswords.delete(message.name);
+          const { deleteChannel } = await import('./lib/database.js');
+          deleteChannel(message.name);
+          channelPasswordsCache.delete(message.name);
 
-          // Silinen kanaldaki kullanıcıları bağlantısını kes
           const roomData = rooms.get(message.name);
           if (roomData) {
             for (const [id, clientWs] of Object.entries(roomData)) {
@@ -961,121 +1180,101 @@ wss.on('connection', (ws, req) => {
             }
           }
 
-          await saveData();
-
-          // Tüm istemcilere yayınla
-          wss.clients.forEach(c => {
-            if (c.readyState === 1) {
-              c.send(JSON.stringify({
-                type: 'channel-deleted',
-                channel: message.name
-              }));
-            }
+          broadcastToAll({
+            type: 'channel-deleted',
+            channel: message.name
           });
           break;
         }
 
         case 'admin-set-password': {
           if (!client.isAdmin) {
-            ws.send(JSON.stringify({ type: 'error', message: 'Yetkisiz' }));
+            ws.send(JSON.stringify({ type: 'error', message: 'Unauthorized' }));
             break;
           }
 
-          const channel = appData.channels.find(ch => ch.name === message.name);
-          if (!channel) {
-            ws.send(JSON.stringify({ type: 'error', message: 'Kanal bulunamadı' }));
-            break;
-          }
+          const { setChannelPassword } = await import('./lib/database.js');
+          const password = message.password ? hashPassword(message.password) : null;
+          setChannelPassword(message.name, password);
 
-          if (message.password) {
-            channel.password = hashPassword(message.password);
-            channelPasswords.set(message.name, channel.password);
+          if (password) {
+            channelPasswordsCache.set(message.name, password);
           } else {
-            channel.password = null;
-            channelPasswords.delete(message.name);
+            channelPasswordsCache.delete(message.name);
           }
-          await saveData();
 
-          // Şifre durum değişikliğini yayınla
-          wss.clients.forEach(c => {
-            if (c.readyState === 1) {
-              c.send(JSON.stringify({
-                type: 'channel-password-changed',
-                channel: message.name,
-                hasPassword: !!channel.password
-              }));
-            }
+          broadcastToAll({
+            type: 'channel-password-changed',
+            channel: message.name,
+            hasPassword: !!password
           });
           break;
         }
 
         case 'admin-ban-user': {
           if (!client.isAdmin) {
-            ws.send(JSON.stringify({ type: 'error', message: 'Yetkisiz' }));
+            ws.send(JSON.stringify({ type: 'error', message: 'Unauthorized' }));
             break;
           }
 
           const username = message.username?.toLowerCase();
           if (!username) break;
 
-          bannedUsernames.add(username);
+          const { addBan } = await import('./lib/database.js');
+          addBan('username', username, client.username);
+          bannedUsernamesCache.add(username);
 
-          // Yasaklı kullanıcıyı bağlantısını kes
           for (const [clientWs, c] of clients) {
             if (c.username?.toLowerCase() === username) {
               clientWs.send(JSON.stringify({
                 type: 'error',
-                message: 'Bu sunucudan yasaklandınız'
+                message: 'You have been banned from this server'
               }));
-              clientWs.close(1008, 'Yasaklı');
+              clientWs.close(1008, 'Banned');
             }
           }
-
-          await saveData();
           break;
         }
 
         case 'admin-unban-user': {
           if (!client.isAdmin) {
-            ws.send(JSON.stringify({ type: 'error', message: 'Yetkisiz' }));
+            ws.send(JSON.stringify({ type: 'error', message: 'Unauthorized' }));
             break;
           }
 
           const username = message.username?.toLowerCase();
           if (username) {
-            bannedUsernames.delete(username);
-            await saveData();
+            const { removeBan } = await import('./lib/database.js');
+            removeBan('username', username);
+            bannedUsernamesCache.delete(username);
           }
           break;
         }
 
-        // === MESAJLAŞMA SİSTEMİ ===
         case 'chat-message': {
-          // Kullanıcıdan kullanıcıya veya tüm odaya mesaj
           if (!client.room || !client.username) {
-            ws.send(JSON.stringify({ type: 'error', message: 'Önce bir odaya katılın' }));
+            ws.send(JSON.stringify({ type: 'error', message: 'Join a room first' }));
             break;
           }
 
-          const targetId = message.target; // null = broadcast
+          const targetId = message.target;
           const content = message.content?.trim();
 
           if (!content) {
-            ws.send(JSON.stringify({ type: 'error', message: 'Geçersiz mesaj' }));
+            ws.send(JSON.stringify({ type: 'error', message: 'Invalid message' }));
             break;
           }
 
           const timestamp = Date.now();
 
           if (targetId) {
-            // Öze mesaj - tek kullanıcıya
+            // Private message
             const targetWs = rooms.get(client.room)?.[targetId];
             if (!targetWs) {
-              ws.send(JSON.stringify({ type: 'error', message: 'Alıcı bulunamadı' }));
+              ws.send(JSON.stringify({ type: 'error', message: 'Recipient not found' }));
               break;
             }
 
-            // Mesajı alıcıya gönder
             targetWs.send(JSON.stringify({
               type: 'chat-message',
               from: clientId,
@@ -1084,7 +1283,6 @@ wss.on('connection', (ws, req) => {
               timestamp: timestamp
             }));
 
-            // Gönderene onay
             ws.send(JSON.stringify({
               type: 'chat-sent',
               to: targetId,
@@ -1092,7 +1290,7 @@ wss.on('connection', (ws, req) => {
               timestamp: timestamp
             }));
           } else {
-            // Broadcast - odadaki herkese
+            // Broadcast to room
             const roomClients = rooms.get(client.room);
             if (!roomClients) break;
 
@@ -1105,14 +1303,12 @@ wss.on('connection', (ws, req) => {
               broadcast: true
             };
 
-            // Odadaki herkese gönder (kendisi hariç)
             for (const [id, targetWs] of Object.entries(roomClients)) {
               if (id !== clientId && targetWs.readyState === 1) {
                 targetWs.send(JSON.stringify(baseMsg));
               }
             }
 
-            // Gönderene onay (broadcast olarak işaretlendi)
             ws.send(JSON.stringify({
               type: 'chat-sent',
               broadcast: true,
@@ -1121,13 +1317,12 @@ wss.on('connection', (ws, req) => {
             }));
           }
 
-          // Afet/acil kelime kontrolü
+          // Disaster alert keywords
           const alertKeywords = ['afet', 'acil', 'yardım', 'deprem', 'sel', 'yangın', 'taşkın', 'çığ', 'heyelan', 'patlama', 'saldırı'];
           const lowerContent = content.toLowerCase();
           const hasAlertKeyword = alertKeywords.some(kw => lowerContent.includes(kw));
 
           if (hasAlertKeyword) {
-            // Tüm odalara acil uyarı yay
             const alertMsg = {
               type: 'broadcast-alert',
               from: clientId,
@@ -1138,21 +1333,15 @@ wss.on('connection', (ws, req) => {
               timestamp: Date.now()
             };
 
-            wss.clients.forEach(c => {
-              if (c.readyState === 1) {
-                c.send(JSON.stringify(alertMsg));
-              }
-            });
-
-            console.log(`  🚨 AFET UYARISI: ${client.username}: ${content}`);
+            broadcastToAll(alertMsg);
+            console.log(`  🚨 DISASTER ALERT: ${client.username}: ${content}`);
           }
           break;
         }
 
         case 'sos-alert': {
-          // SOS acil durum sinyali
           if (!client.room || !client.username) {
-            ws.send(JSON.stringify({ type: 'error', message: 'Önce bir odaya katılın' }));
+            ws.send(JSON.stringify({ type: 'error', message: 'Join a room first' }));
             break;
           }
 
@@ -1163,20 +1352,13 @@ wss.on('connection', (ws, req) => {
             room: client.room,
             latitude: client.latitude || null,
             longitude: client.longitude || null,
-            message: message.message || 'SOS - Acil Yardım Gerekiyor!',
+            message: message.message || 'SOS - Emergency Assistance Required!',
             timestamp: Date.now()
           };
 
-          // Tüm kullanıcılara SOS sinyali gönder
-          wss.clients.forEach(c => {
-            if (c.readyState === 1) {
-              c.send(JSON.stringify(sosData));
-            }
-          });
+          broadcastToAll(sosData);
+          console.log(`  🆘 SOS ALERT: ${client.username} - ${client.latitude},${client.longitude}`);
 
-          console.log(`  🆘 SOS SİNYALİ: ${client.username} - ${client.latitude},${client.longitude}`);
-
-          // Gönderene onay
           ws.send(JSON.stringify({
             type: 'sos-sent',
             timestamp: Date.now()
@@ -1185,7 +1367,6 @@ wss.on('connection', (ws, req) => {
         }
 
         case 'get-users': {
-          // Odadaki kullanıcı listesini al
           if (client.room) {
             const users = getRoomUsers(client.room);
             ws.send(JSON.stringify({
@@ -1196,9 +1377,17 @@ wss.on('connection', (ws, req) => {
           }
           break;
         }
+
+        case 'pong': {
+          // Heartbeat response
+          if (client) {
+            client.lastHeartbeat = Date.now();
+          }
+          break;
+        }
       }
     } catch (e) {
-      console.error('Mesaj işlenirken hata:', e);
+      console.error('Message processing error:', e);
     }
   });
 
@@ -1216,7 +1405,7 @@ wss.on('connection', (ws, req) => {
         });
       }
 
-      // Bu kullanıcı iletiyorsa aktif vericiyi temizle
+      // Clear transmitter if this user was transmitting
       const currentTx = activeTransmitters.get(client.room);
       if (currentTx === client.id) {
         activeTransmitters.delete(client.room);
@@ -1226,34 +1415,108 @@ wss.on('connection', (ws, req) => {
         });
       }
     }
+
     clients.delete(ws);
-    console.log(`[${new Date().toISOString()}] İstemci bağlantısı kesildi: ${client?.id || clientId}`);
+    untrackConnection(clientIP);
+    messageQueues.delete(ws);
+
+    if (!IS_PROD) {
+      console.log(`[${new Date().toISOString()}] Client disconnected: ${client?.id || clientId}`);
+    }
   });
 
   ws.on('error', (e) => {
-    console.error(`WebSocket hatası:`, e);
+    console.error(`WebSocket error:`, e);
+  });
+
+  ws.on('pong', () => {
+    const client = clients.get(ws);
+    if (client) {
+      client.lastHeartbeat = Date.now();
+    }
   });
 });
 
-// Sunucuyu başlat
-const adminToken = await initData();
+// ===== MAINTENANCE TASKS =====
 
-// Rate limiter temizleme - her 5 dakikada bir eski kayıtları temizle
-setInterval(() => {
+// Cleanup stale connections
+function cleanupStaleConnections() {
   const now = Date.now();
+  let cleaned = 0;
+
+  for (const [ws, client] of clients) {
+    if (now - client.lastHeartbeat > CONNECTION_TIMEOUT) {
+      ws.terminate();
+      cleaned++;
+    }
+  }
+
+  // Clean up rate limiter
   for (const [ip, record] of rateLimitMap.entries()) {
     if (now > record.resetTime) {
       rateLimitMap.delete(ip);
     }
   }
-}, 5 * 60 * 1000);
 
-httpServer.listen(HTTP_PORT, HOST, () => {
-  console.log(`\n📡 EmercallPlus Intranet PTT Sunucusu`);
-  console.log(`📡 HTTP: http://localhost:${HTTP_PORT}`);
-  console.log(`📡 Ağ: http://${getLocalIP()}:${HTTP_PORT}`);
-  console.log(`🔑 Yönetici Anahtarı: ${adminToken}`);
-  console.log(`📍 GPS Koordinat Takip Aktif`);
-  console.log(`🛡️  Güvenlik: Rate limiting, CSP, Security Headers aktif`);
-  console.log(`📡 Bağlantıları kabul etmeye hazır\n`);
-});
+  // Clean up database sessions
+  const sessionsCleaned = dbFunctions ? dbFunctions.cleanupOldSessions(CONNECTION_TIMEOUT) : 0;
+
+  if (!IS_PROD && cleaned > 0) {
+    console.log(`🧹 Cleaned up ${cleaned} stale connections, ${sessionsCleaned} old sessions`);
+  }
+}
+
+// Start maintenance interval
+setInterval(cleanupStaleConnections, SESSION_CLEANUP_INTERVAL);
+
+// Graceful shutdown
+process.on('SIGTERM', gracefulShutdown);
+process.on('SIGINT', gracefulShutdown);
+
+function gracefulShutdown() {
+  console.log('\n🛑 Shutting down gracefully...');
+
+  // Close WebSocket server
+  wss.close(() => {
+    console.log('✅ WebSocket server closed');
+  });
+
+  // Close HTTP server
+  httpServer.close(() => {
+    console.log('✅ HTTP server closed');
+  });
+
+  // Close database
+  if (dbFunctions && dbFunctions.closeDatabase) {
+    dbFunctions.closeDatabase();
+    console.log('✅ Database closed');
+  }
+
+  process.exit(0);
+}
+
+// ===== START SERVER =====
+
+async function start() {
+  console.log('\n🔧 Initializing EmerCallPlus Emergency PTT Server...\n');
+
+  // Initialize database
+  const adminToken = await initDatabase();
+
+  httpServer.listen(HTTP_PORT, HOST, () => {
+    console.log(`\n📡 EmerCallPlus Emergency PTT Server`);
+    console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+    console.log(`📡 HTTP Server: http://localhost:${HTTP_PORT}`);
+    console.log(`📡 Network: http://${getLocalIP()}:${HTTP_PORT}`);
+    console.log(`🔑 Admin Token: ${adminToken}`);
+    console.log(`📍 GPS Tracking: Active`);
+    console.log(`🛡️  Security: Rate limiting, CSP, Security headers`);
+    console.log(`💾 Database: SQLite with WAL mode`);
+    console.log(`🗜️  Compression: ${IS_PROD ? 'Enabled' : 'Disabled'}`);
+    console.log(`📊 Performance limits: ${MAX_CONNECTIONS} connections, ${MAX_CONNECTIONS_PER_IP} per IP`);
+    console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
+    console.log(`✅ Ready to accept connections\n`);
+  });
+}
+
+start().catch(console.error);
