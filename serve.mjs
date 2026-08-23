@@ -47,7 +47,7 @@ const MESSAGE_BATCH_SIZE = parseInt(process.env.MESSAGE_BATCH_SIZE || '100');
 const MESSAGE_BATCH_TIMEOUT = parseInt(process.env.MESSAGE_BATCH_TIMEOUT || '10');
 const HEARTBEAT_INTERVAL = 30000; // 30 seconds
 const CONNECTION_TIMEOUT = 120000; // 2 minutes
-const SESSION_CLEANUP_INTERVAL = 300000; // 5 minutes
+const SESSION_CLEANUP_INTERVAL = 60000; // 1 minute (heartbeat is 30s, timeout 2min)
 
 // Rate limiting
 const RATE_LIMIT_WINDOW = 60000; // 1 dakika
@@ -130,12 +130,41 @@ const WS_RATE_LIMIT_WINDOW = 60000; // 1 minute
 const WS_RATE_LIMIT_SOS_MAX = 3; // 3 SOS per minute
 const WS_RATE_LIMIT_CHAT_MAX = 30; // 30 chat messages per minute
 
+// IP-scoped aggregate rate limit for emergency alerts (SOS/disaster).
+// Keyed by IP rather than by connection so opening additional sockets
+// cannot reset the budget — the count persists across sockets from the
+// same source until the window elapses.
+const IP_ALERT_RATE_WINDOW = 60000; // 1 minute
+const IP_ALERT_RATE_MAX = 6; // 6 emergency broadcasts per minute per IP
+const ipAlertRate = new Map(); // { ip: { count, resetTime } }
+
+/**
+ * Reserve one emergency-broadcast slot for an IP. Returns true if the IP is
+ * within budget (and the slot is consumed), false if the aggregate quota for
+ * the window is exhausted regardless of how many sockets the IP holds.
+ */
+function checkIpAlertRate(ip) {
+  const now = Date.now();
+  const rec = ipAlertRate.get(ip);
+  if (!rec || now > rec.resetTime) {
+    ipAlertRate.set(ip, { count: 1, resetTime: now + IP_ALERT_RATE_WINDOW });
+    return true;
+  }
+  if (rec.count >= IP_ALERT_RATE_MAX) return false;
+  rec.count++;
+  return true;
+}
+
 let clientIdCounter = 0;
 
 // ===== WEBSOCKET CONFIGURATION =====
 const wssOptions = {
   clientTracking: true,
   maxPayload: 1024 * 1024, // 1MB max message size
+  // Cross-Site WebSocket Hijacking defense: reject any handshake whose Origin
+  // is not explicitly allowed (same allow-list as the HTTP CORS layer), so a
+  // malicious site cannot open a socket that inherits the victim's cookies.
+  verifyClient: (info) => isAllowedOrigin(info.origin),
   perMessageDeflate: IS_PROD ? {
     threshold: 1024, // Only compress messages > 1KB
     concurrencyLimit: 10,
@@ -180,6 +209,31 @@ function getClientIP(req) {
   return remoteAddr || 'unknown';
 }
 
+/**
+ * Shared Origin allow-list used by both the HTTP CORS layer and the WebSocket
+ * handshake (CSWSH defense). In production, restrict to CORS_ALLOWED_ORIGINS.
+ * In development, additionally allow the loopback and private-LAN origins so
+ * the SPA works across the local network without listing every host.
+ */
+function isAllowedOrigin(origin) {
+  if (!origin || typeof origin !== 'string') return false;
+
+  const allowedOrigins = process.env.CORS_ALLOWED_ORIGINS
+    ? process.env.CORS_ALLOWED_ORIGINS.split(',').map(o => o.trim())
+    : IS_PROD ? [] : [];
+
+  if (allowedOrigins.includes(origin)) return true;
+  if (IS_PROD) return false;
+
+  if (origin === 'http://localhost' || origin === 'http://127.0.0.1') return true;
+  if (origin.match(/^https?:\/\/localhost(:\d+)?$/)) return true;
+  if (origin.match(/^https?:\/\/127\.0\.0\.1(:\d+)?$/)) return true;
+
+  return !!origin.match(/^https?:\/\/192\.168\.\d+\.\d+(:\d+)?$/) ||
+    !!origin.match(/^https?:\/\/10\.\d+\.\d+\.\d+(:\d+)?$/) ||
+    !!origin.match(/^https?:\/\/172\.(1[6-9]|2[0-9]|3[0-1])\.\d+\.\d+(:\d+)?$/);
+}
+
 function sanitizeInput(input) {
   if (typeof input !== 'string') return input;
   return input
@@ -199,6 +253,23 @@ function validateChannelName(name) {
 function validateUsername(username) {
   if (!username || typeof username !== 'string') return false;
   return /^[a-zA-Z0-9ÇĞİÖŞÜçğıöşu_-]{2,15}$/.test(username);
+}
+
+/**
+ * Normalize an attacker-controlled device identifier to a safe, inert token.
+ * The SPA generates device IDs as `cih_` + hex UUID, but any participant can
+ * send arbitrary join payloads. We never render client input verbatim: strip
+ * HTML/control characters and cap the length so the value cannot carry markup
+ * into the admin UI even if a future sink forgets to escape it (defense in
+ * depth for the stored-XSS finding).
+ */
+function validateDeviceId(deviceId) {
+  if (!deviceId || typeof deviceId !== 'string') return null;
+  // Permit only the safe character set used by real device identifiers
+  // (ASCII alnum, underscore, hyphen, dot, colon) and drop the rest.
+  const clean = deviceId.replace(/[^a-zA-Z0-9_.:-]/g, '');
+  // Enforce a sane length so the value stays within any bounded display.
+  return clean.length > 64 ? clean.substring(0, 64) : clean;
 }
 
 function hashPassword(password, salt) {
@@ -407,6 +478,37 @@ function getRoomUserCount(room) {
   return roomClients ? Object.keys(roomClients).length : 0;
 }
 
+// Announce a room's user count to every connected client so channel badges
+// stay accurate for channels the client is not currently in (and for a
+// client that just left the room).
+function broadcastRoomCount(room) {
+  if (!room) return;
+  broadcastToAll({
+    type: 'room-count',
+    roomId: room,
+    userCount: getRoomUserCount(room)
+  });
+}
+
+// Distinct online users across all rooms, keyed by deviceId (fallback: username).
+// Sockets that never joined a room and stale/duplicate connections don't count;
+// a user with several open connections (reconnecting mobile, second tab) counts once.
+function getOnlineUsers() {
+  const byKey = new Map();
+
+  for (const [ws, client] of clients) {
+    if (!client.room || !client.username) continue;
+
+    const key = client.deviceId || `user:${client.username}`;
+    const existing = byKey.get(key);
+    if (!existing || client.lastHeartbeat > existing.client.lastHeartbeat) {
+      byKey.set(key, { ws, client });
+    }
+  }
+
+  return [...byKey.values()];
+}
+
 // ===== HTTP SERVER =====
 
 const httpServer = createServer(async (req, res) => {
@@ -439,19 +541,8 @@ const httpServer = createServer(async (req, res) => {
   );
   res.removeHeader('X-Powered-By');
 
-  // CORS - Allow configured origins only
-  // In production, restrict to expected origins via CORS_ALLOWED_ORIGINS env var (comma-separated)
-  // In development, allow localhost and LAN origins
-  const allowedOrigins = process.env.CORS_ALLOWED_ORIGINS
-    ? process.env.CORS_ALLOWED_ORIGINS.split(',').map(o => o.trim())
-    : IS_PROD ? [] : ['http://localhost', 'http://127.0.0.1'];
-
   const origin = req.headers.origin;
-  if (origin) {
-    const isAllowed = allowedOrigins.includes(origin) ||
-      (!IS_PROD && origin.match(/^https?:\/\/192\.168\.\d+\.\d+(:\d+)?$/)) ||
-      (!IS_PROD && origin.match(/^https?:\/\/10\.\d+\.\d+\.\d+(:\d+)?$/)) ||
-      (!IS_PROD && origin.match(/^https?:\/\/172\.(1[6-9]|2[0-9]|3[0-1])\.\d+\.\d+(:\d+)?$/));
+  if (origin && isAllowedOrigin(origin)) {
 
     if (isAllowed) {
       res.setHeader('Access-Control-Allow-Origin', origin);
@@ -522,7 +613,9 @@ const httpServer = createServer(async (req, res) => {
 
       const content = await readFile(indexPath, 'utf-8');
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.setHeader('Cache-Control', IS_PROD ? 'public, max-age=3600' : 'no-cache');
+      // HTML her zaman yeniden doğrulanmalı: yeni istemci kodu deploy edildikten
+      // sonra tarayıcılar eski sürümü önbellekten çalıştırmasın.
+      res.setHeader('Cache-Control', 'no-cache');
 
       if (acceptsGzip(req) && IS_PROD) {
         const compressed = await gzipAsync(content);
@@ -552,11 +645,13 @@ const httpServer = createServer(async (req, res) => {
       has_password: !!ch.has_password,
       created_by: ch.created_by,
       created_at: ch.created_at,
-      updated_at: ch.updated_at
+      updated_at: ch.updated_at,
+      users: getRoomUserCount(ch.name)
     } : {
       name: ch.name,
       created_at: ch.created_at,
-      updated_at: ch.updated_at
+      updated_at: ch.updated_at,
+      users: getRoomUserCount(ch.name)
     });
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Cache-Control', isAdmin ? 'no-store' : 'public, max-age=10');
@@ -725,22 +820,14 @@ const httpServer = createServer(async (req, res) => {
       return;
     }
 
-    const onlineUsers = [];
-    for (const [roomName, roomClients] of rooms) {
-      for (const [id, ws] of Object.entries(roomClients)) {
-        const client = clients.get(ws);
-        if (client) {
-          onlineUsers.push({
-            id,
-            username: client.username,
-            room: roomName,
-            deviceId: client.deviceId,
-            latitude: client.latitude,
-            longitude: client.longitude
-          });
-        }
-      }
-    }
+    const onlineUsers = getOnlineUsers().map(({ client }) => ({
+      id: client.id,
+      username: client.username,
+      room: client.room,
+      deviceId: client.deviceId,
+      latitude: client.latitude,
+      longitude: client.longitude
+    }));
 
     const { getBans } = await import('./lib/database.js');
     const bans = getBans();
@@ -826,9 +913,11 @@ const httpServer = createServer(async (req, res) => {
 
     const roomStats = [];
     for (const [name, roomClients] of rooms) {
+      const users = Object.keys(roomClients).length;
+      if (users === 0) continue; // stale empty room
       roomStats.push({
         name,
-        users: Object.keys(roomClients).length,
+        users,
         hasPassword: !!channelPasswordsCache.get(name)
       });
     }
@@ -837,10 +926,10 @@ const httpServer = createServer(async (req, res) => {
     const dbStats = getDatabaseStats();
 
     res.setHeader('Content-Type', 'application/json');
-    res.setHeader('Cache-Control', 'public, max-age=5');
+    res.setHeader('Cache-Control', 'no-store');
     res.end(JSON.stringify({
-      totalRooms: rooms.size,
-      totalClients: clients.size,
+      totalRooms: roomStats.length,
+      totalClients: getOnlineUsers().length,
       rooms: roomStats,
       database: dbStats,
       uptime: process.uptime(),
@@ -1011,8 +1100,14 @@ wss.on('connection', (ws, req) => {
               delete oldRoom[clientId];
               broadcastToRoom(client.room, {
                 type: 'user-left',
-                userId: clientId
+                userId: clientId,
+                userCount: getRoomUserCount(client.room)
               }, ws);
+              if (Object.keys(oldRoom).length === 0) {
+                rooms.delete(client.room);
+                activeTransmitters.delete(client.room);
+              }
+              broadcastRoomCount(client.room);
             }
           }
 
@@ -1134,7 +1229,7 @@ wss.on('connection', (ws, req) => {
 
           client.room = room;
           client.username = username;
-          client.deviceId = message.deviceId;
+          client.deviceId = validateDeviceId(message.deviceId);
 
           // Check bans (using normalized username)
           if (bannedUsernamesCache.has(username)) {
@@ -1166,9 +1261,10 @@ wss.on('connection', (ws, req) => {
           rooms.get(room)[clientId] = ws;
 
           // Send existing users to new client
+          // (newcomer was already added to the room above, so roomUsers includes them)
           const roomUsers = getRoomUsers(room);
           const existingUsers = roomUsers.filter(u => u.id !== clientId);
-          const totalUserCount = roomUsers.length + 1;
+          const totalUserCount = roomUsers.length;
 
           ws.send(JSON.stringify({
             type: 'room-joined',
@@ -1186,6 +1282,7 @@ wss.on('connection', (ws, req) => {
             username: client.username,
             userCount: totalUserCount
           }, ws);
+          broadcastRoomCount(room);
 
           if (!IS_PROD) {
             console.log(`  ${clientId} joined room: ${room} (${totalUserCount} users)`);
@@ -1247,6 +1344,22 @@ wss.on('connection', (ws, req) => {
                 userId: clientId,
                 userCount: count
               }, ws);
+
+              // Clear transmitter if this user was transmitting
+              const currentTx = activeTransmitters.get(client.room);
+              if (currentTx === clientId) {
+                activeTransmitters.delete(client.room);
+                broadcastToRoom(client.room, {
+                  type: 'tx-freed',
+                  userId: clientId
+                });
+              }
+
+              if (count === 0) {
+                rooms.delete(client.room);
+                activeTransmitters.delete(client.room);
+              }
+              broadcastRoomCount(client.room);
             }
             client.room = null;
           }
@@ -1589,8 +1702,13 @@ wss.on('connection', (ws, req) => {
               timestamp: Date.now()
             };
 
-            broadcastToAll(alertMsg);
-            console.log(`  🚨 DISASTER ALERT: ${client.username}: ${content}`);
+            // Scope disaster alerts to the sender's room and bound them with an
+            // IP-scoped aggregate budget (shared with SOS) so a flood of
+            // connections cannot amplify a cross-room broadcast.
+            if (checkIpAlertRate(client.ip)) {
+              broadcastToRoom(client.room, alertMsg);
+              console.log(`  🚨 DISASTER ALERT: ${client.username}: ${content}`);
+            }
           }
           break;
         }
@@ -1621,6 +1739,16 @@ wss.on('connection', (ws, req) => {
           }
           sosRate.count++;
 
+          // IP-scoped aggregate budget (not per-socket) so new sockets
+          // cannot multiply the flood
+          if (!checkIpAlertRate(client.ip)) {
+            ws.send(JSON.stringify({
+              type: 'error',
+              message: 'Too many emergency alerts. Please wait.'
+            }));
+            break;
+          }
+
           // Validate SOS message content (prevent XSS via length/excess)
           const sosMessage = typeof message.message === 'string'
             ? message.message.substring(0, 500) // Limit length
@@ -1637,7 +1765,9 @@ wss.on('connection', (ws, req) => {
             timestamp: Date.now()
           };
 
-          broadcastToAll(sosData);
+          // Scope the alert to the sender's room. Cross-room clients must not
+          // receive emergency broadcasts they did not opt into.
+          broadcastToRoom(client.room, sosData);
           console.log(`  🆘 SOS ALERT: ${client.username} - ${client.latitude},${client.longitude}`);
 
           ws.send(JSON.stringify({
@@ -1684,7 +1814,11 @@ wss.on('connection', (ws, req) => {
           userId: client.id,
           userCount: count
         });
+        if (count === 0) {
+          rooms.delete(client.room);
+        }
       }
+      broadcastRoomCount(client.room);
 
       // Clear transmitter if this user was transmitting
       const currentTx = activeTransmitters.get(client.room);
@@ -1733,10 +1867,16 @@ function cleanupStaleConnections() {
     }
   }
 
-  // Clean up rate limiter
+  // Clean up rate limiters
   for (const [ip, record] of rateLimitMap.entries()) {
     if (now > record.resetTime) {
       rateLimitMap.delete(ip);
+    }
+  }
+
+  for (const [ip, record] of ipAlertRate.entries()) {
+    if (now > record.resetTime) {
+      ipAlertRate.delete(ip);
     }
   }
 

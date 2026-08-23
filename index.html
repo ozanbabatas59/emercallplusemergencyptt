@@ -3314,7 +3314,7 @@
 
     async function loadChannelsFromServer() {
       try {
-        const response = await fetch('/api/channels');
+        const response = await fetch(`/api/channels?_=${Date.now()}`);
         if (response.ok) {
           const channels = await response.json();
           state.availableChannels.clear();
@@ -3322,7 +3322,7 @@
             state.availableChannels.set(ch.name, {
               name: ch.name,
               hasPassword: !!ch.has_password,
-              users: 0
+              users: ch.users || 0
             });
           });
         }
@@ -3366,6 +3366,11 @@
         });
 
         container.appendChild(btn);
+
+        // Sunucudan gelen canlı sayı varsa rozeti çiz
+        if (channel.users > 0) {
+          updateChannelButton(name, channel.users);
+        }
       });
     }
 
@@ -3392,18 +3397,23 @@
 
     function updateChannelButton(channelName, userCount) {
       const btn = document.getElementById(`channel-btn-${channelName}`);
-      if (btn) {
-        const countSpan = btn.querySelector('.channel-btn-users');
+      if (!btn) return;
+
+      const channel = state.availableChannels.get(channelName);
+      if (channel) channel.users = userCount;
+
+      let countSpan = btn.querySelector('.channel-btn-users');
+      if (userCount > 0) {
         if (!countSpan) {
           const info = btn.querySelector('.channel-btn-info');
-          const span = document.createElement('span');
-          span.className = 'channel-btn-users';
-          info.insertBefore(span, info.firstChild);
+          countSpan = document.createElement('span');
+          countSpan.className = 'channel-btn-users';
+          info.insertBefore(countSpan, info.firstChild);
         }
-        const newCountSpan = btn.querySelector('.channel-btn-users');
-        newCountSpan.textContent = `${userCount} ÇEVRİMİÇİ`;
-        const channel = state.availableChannels.get(channelName);
-        if (channel) channel.users = userCount;
+        countSpan.textContent = `${userCount} ÇEVRİMİÇİ`;
+      } else if (countSpan) {
+        // Kanal boşaldı - rozeti kaldır
+        countSpan.remove();
       }
     }
 
@@ -3434,6 +3444,15 @@
       const port = location.port || (location.protocol === 'https:' ? '' : '3000');
       const wsUrl = `${protocol}//${location.hostname}${port ? ':' + port : ''}`;
       addSystemMessage(`Bağlanıyor: ${wsUrl}`, 'info');
+
+      // Kanal listesinde beklerken açık kalan eski soketi usulüne uygun kapat
+      if (state.ws && state.ws.readyState <= WebSocket.OPEN) {
+        state.ws.onopen = null;
+        state.ws.onmessage = null;
+        state.ws.onclose = null;
+        state.ws.onerror = null;
+        state.ws.close();
+      }
 
       state.ws = new WebSocket(wsUrl);
 
@@ -3666,6 +3685,11 @@
         case 'sos-alert':
           // SOS acil durum sinyali
           handleSOSAlert(msg);
+          break;
+
+        case 'room-count':
+          // Herhangi bir kanalın çevrimiçi sayısı değişti (bulunmadığım kanallar dahil)
+          updateChannelButton(msg.roomId, msg.userCount);
           break;
 
         case 'users-list':
@@ -4912,13 +4936,14 @@
 
       users.forEach(user => {
         const isMe = user.username.toLowerCase() === state.myUsername?.toLowerCase();
+        const safeDeviceId = escapeHtml(user.deviceId || '');
         const div = document.createElement('div');
         div.className = 'user-item';
         div.innerHTML = `
-          <div class="user-avatar">${user.username.slice(0, 2).toUpperCase()}</div>
-          <span class="user-name">${user.username}${isMe ? ' (Siz)' : ''}</span>
-          <span style="font-size: 0.55rem; color: var(--text-dim);">${user.room}</span>
-          ${!isMe ? `<button class="btn btn-small btn-danger" style="margin-left: auto;" data-ban-device="${user.deviceId}">Yasakla</button>` : '<span style="margin-left: auto; font-size: 0.55rem; color: var(--text-dim);">Kendini yasaklayamazsın</span>'}
+          <div class="user-avatar">${escapeHtml(user.username.slice(0, 2).toUpperCase())}</div>
+          <span class="user-name">${escapeHtml(user.username)}${isMe ? ' (Siz)' : ''}</span>
+          <span style="font-size: 0.55rem; color: var(--text-dim);">${escapeHtml(user.room)}</span>
+          ${!isMe ? `<button class="btn btn-small btn-danger" style="margin-left: auto;" data-ban-device="${safeDeviceId}">Yasakla</button>` : '<span style="margin-left: auto; font-size: 0.55rem; color: var(--text-dim);">Kendini yasaklayamazsın</span>'}
         `;
         dom.adminUsersList.appendChild(div);
       });
@@ -4939,11 +4964,12 @@
       }
 
       bannedItems.forEach(item => {
+        const safeItem = escapeHtml(item);
         const div = document.createElement('div');
         div.className = 'ban-item';
         div.innerHTML = `
-          <span class="ban-ip">${item}</span>
-          <button class="btn btn-small" data-unban-item="${item}">Yasağı Kaldır</button>
+          <span class="ban-ip">${safeItem}</span>
+          <button class="btn btn-small" data-unban-item="${safeItem}">Yasağı Kaldır</button>
         `;
         dom.banList.appendChild(div);
       });
@@ -5160,8 +5186,10 @@
     // Leave button
     dom.leaveBtn.addEventListener('click', () => {
       send('leave');
+      // Soketi kapatmıyoruz: kanal listesinde beklerken de çevrimiçi sayı
+      // duyurularını (room-count) canlı almak için açık kalır. Sunucu bu
+      // soketi artık oda dışı sayar; hiçbir kanal sayacına etki etmez.
       disconnect();
-      if (state.ws) state.ws.close();
     });
 
     // PTT button - Desktop mouse events
