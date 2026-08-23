@@ -1,0 +1,24 @@
+[phases.install]
+cmds = ["npm ci"]
+
+[phases.build]
+cmds = ["npm run build"]
+
+[start]
+cmd = "node serve.mjs"
+
+[variables]
+NODE_ENV = "production"
+PORT = "4000"
+MAX_CONNECTIONS = "1000"
+MAX_CONNECTIONS_PER_IP = "100"
+MESSAGE_BATCH_SIZE = "100"
+MESSAGE_BATCH_TIMEOUT = "10"
+
+[healthcheck]
+path = "/health"
+port = 4000
+test = "curl -f http://localhost:4000/health || exit 1"
+interval = 30
+timeout = 10
+retries = 3

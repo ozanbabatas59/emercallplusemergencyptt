@@ -1,0 +1,25 @@
+# Docker ignore for production builds
+
+node_modules
+npm-debug.log
+.git
+.gitignore
+.env
+.env.local
+.env.production
+
+# Data (will be mounted as volume)
+data.json
+
+# Documentation
+README.md
+*.md
+
+# IDE
+.vscode
+.idea
+*.sublime-*
+
+# OS
+.DS_Store
+Thumbs.db
